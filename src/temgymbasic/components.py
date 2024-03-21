@@ -620,7 +620,7 @@ class Biprism(Component):
         pos_x = rays.x
         pos_y = rays.y
         rays_v = np.array([pos_x, pos_y]).T
-        r = 1  #Just used for creating the biprism vector
+        r = 1  # Just used for creating the biprism vector
 
         biprism_loc_v = np.array([offset, 0.0])
         biprism_v = np.array([r*np.cos(rot), r*np.sin(rot)])
@@ -629,9 +629,13 @@ class Biprism(Component):
 
         dot_product = np.dot(rays_v_centred, biprism_v) / np.dot(biprism_v, biprism_v)
         projection = np.outer(dot_product, biprism_v)
+
         rejection = projection - rays_v_centred
         rejection_norm = rejection/np.linalg.norm(rejection, axis=1, keepdims=True)
-        rejection_norm = np.nan_to_num(rejection_norm) #If the ray position is located at [zero, zero], rejection_norm returns a nan, so we convert it to a zero, zero. 
+
+        # If the ray position is located at [zero, zero], rejection_norm returns a nan,
+        # so we convert it to a zero, zero.
+        rejection_norm = np.nan_to_num(rejection_norm)
 
         xdeflection_mag = rejection_norm[:, 0]
         ydeflection_mag = rejection_norm[:, 1]
