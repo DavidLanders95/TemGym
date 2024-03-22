@@ -23,6 +23,7 @@ class Rays:
     indices: np.ndarray
     location: Union[float, 'Component', Tuple['Component', ...]]
     path_length: np.ndarray
+    wavelength: float
 
     @property
     def z(self) -> float:
@@ -102,7 +103,8 @@ class Rays:
             path_length=(
                 self.path_length
                 + 1.0 * distance * (1 + self.dx**2 + self.dy**2)**0.5
-            )
+            ),
+            wavelength=self.wavelength
         )
 
     def propagate_to(self, z: float) -> Self:
