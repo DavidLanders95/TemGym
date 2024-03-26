@@ -28,7 +28,7 @@ def plot_model(model, *, plot_params: PlotParams = PlotParams()):
 
     if isinstance(model.components[0], RadialSpikesBeam):
         raise NotImplementedError
-    
+
     x = np.stack(tuple(r.x for r in rays), axis=0)
     z = np.asarray(tuple(r.z for r in rays))
     min_x_idx = np.argmin(x[0, :])
@@ -115,8 +115,8 @@ def plot_model(model, *, plot_params: PlotParams = PlotParams()):
         elif isinstance(component, Sample):
             ax.text(extent, component.z,
                 component.name, fontsize=p.label_fontsize, zorder=1000, va='center')
-            ax.plot([-scan_range_x, scan_range_x], [component.z, component.z],
-                color='dimgrey', alpha=0.8, linewidth=3)
+            ax.plot([-component.pixel_size*component.shape[1]/2, component.pixel_size*component.shape[1]/2],
+                    [component.z, component.z], color='dimgrey', alpha=0.8, linewidth=3)
         elif isinstance(component, Detector):
             ax.text(extent, component.z, component.name, fontsize=p.label_fontsize,
                     zorder=1000, va='center')
