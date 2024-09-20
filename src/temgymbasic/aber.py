@@ -85,7 +85,7 @@ def grad_Theta(X, Y):
     """
     mask = (np.abs(X) < 1e-12) & (np.abs(Y) < 1e-12)
     dThetadx = np.where(mask, 0, -Y / (X ** 2 + Y ** 2))
-    dThetady = np.where(mask, 0, 1 / (X ** 2 + Y ** 2))
+    dThetady = np.where(mask, 0, X / (X ** 2 + Y ** 2))
 
     return dThetadx, dThetady
 

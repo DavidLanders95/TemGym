@@ -297,6 +297,7 @@ def random_coords(num: int, max_r: float, with_radii: bool = False):
 
 def circular_beam(
     num_rays_approx: int,
+    xy_offset: Tuple[float, float],
     outer_radius: float,
     random: bool = False,
 ) -> NDArray:
@@ -321,8 +322,8 @@ def circular_beam(
     else:
         y, x = concentric_rings(num_rays_approx, outer_radius)
     r = initial_r(y.shape[0])
-    r[0, :] = x
-    r[2, :] = y
+    r[0, :] = x + xy_offset[0]
+    r[2, :] = y + xy_offset[1]
     return r
 
 
@@ -380,6 +381,7 @@ def fibonacci_beam_gauss_rayset(
 
 def point_beam(
     num_rays_approx: int,
+    xy_offset: Tuple[float, float],
     semiangle: float,
     random: bool = False,
 ) -> NDArray:
@@ -404,7 +406,10 @@ def point_beam(
     else:
         y, x = concentric_rings(num_rays_approx, semiangle)
     r = initial_r(y.size)
-    r[1, :] = y
+    
+    r[0, :] += xy_offset[0]
+    r[1, :] = y 
+    r[2, :] += xy_offset[1]
     r[3, :] = x
     return r
 
