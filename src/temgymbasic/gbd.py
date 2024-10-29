@@ -280,7 +280,7 @@ def propagate_misaligned_gaussian(
     # (n_gauss,): complex
     guoy = guoy_phase(Qpinv, xp=xp)  # Guoy phase
     # (n_gauss,): complex
-    amplitude = gaussian_amplitude(Qinv, A, B, xp=xp)  # Complex Gaussian amplitude
+    amplitude = 1.0 * gaussian_amplitude(Qinv, A, B, xp=xp)  # Complex Gaussian amplitude
     # (n_gauss,): complex
     aligned *= 1j
     aligned += 1j * misaligned_phase
