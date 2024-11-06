@@ -76,10 +76,15 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 abtem.show_atoms(atoms, ax=ax1, title="Beam view", numbering=True, merge=False)
 abtem.show_atoms(atoms, ax=ax2, plane="xz", title="Side view", legend=True)
 
-potential = abtem.Potential(atoms, sampling=pixel_size, projection="infinite", slice_thickness=prop_dist)
+potential = abtem.Potential(atoms, sampling=pixel_size, projection="infinite",
+                            slice_thickness=prop_dist)
 phase_shift = np.asarray(potential.build().compute().transmission_function(phi_0).compute().array[1])
 npix = phase_shift.shape[0]
 extent = potential.build().extent
+
+max_phase_shift_pixel = np.unravel_index(np.argmax(np.angle(phase_shift)), phase_shift.shape)
+mask = np.zeros_like(phase_shift)
+mask[max_phase_shift_pixel] = 1.0
 
 plt.figure()
 plt.imshow(np.angle(phase_shift), extent=[0, extent[0], 0, extent[1]], origin='lower')
@@ -91,6 +96,12 @@ components = (
         radius=x0,
         wo=wo,
         tilt_yx=tilt_yx,
+    ),
+    comp.DiffractingPlanes(
+        z=0.5,
+        field=phase_shift,
+        mask=mask,
+        mask_coordinates=(max_phase_shift_pixel[1], max_phase_shift_pixel[0]),
     ),
     comp.Detector(
         z=z_start,

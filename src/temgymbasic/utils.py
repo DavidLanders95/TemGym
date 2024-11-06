@@ -395,6 +395,7 @@ def gauss_beam_rayset(
     wavelength: float,
     xp=np,
     random: bool = False,
+    random_subset: int = 100,
 ) -> NDArray:
 
     div = wavelength / (np.pi * wo)
@@ -412,6 +413,13 @@ def gauss_beam_rayset(
     else:
         y, x = fibonacci_spiral(num_gauss_approx, outer_radius, xp=xp)
         dy, dx = fibonacci_spiral(num_gauss_approx, semi_angle, xp=xp)
+
+        # Use random subset parameter to subsample the fibonacci pattern,
+        # still allowing us to build up
+        # a pseudo random distribution of rays that follow the fibonacci pattern.
+        indices = xp.random.choice(y.shape[0], random_subset, replace=False)
+        y, x = y[indices], x[indices]
+        dy, dx = dy[indices], dx[indices]
 
     # this multiplies n_rays by 5
     r = initial_r_rayset(y.shape[0], xp=xp)
