@@ -391,18 +391,20 @@ def gauss_beam_rayset(
     num_gauss_approx: int,
     outer_radius: float,
     semi_angle: float,
-    wo: float,
+    wo: NDArray,
     wavelength: float,
     xp=np,
     random: bool = False,
     random_subset: int = 100,
+    offset_yx: tuple = [0.0, 0.0]
 ) -> NDArray:
 
-    div = wavelength / (np.pi * wo)
-    dPx = wo
-    dPy = wo
-    dHx = div
-    dHy = div
+    div = wavelength / (xp.pi * wo)
+    dPx = xp.array(wo, dtype=xp.float64)
+    dPy = xp.array(wo, dtype=xp.float64)
+    dHx = xp.array(div, dtype=xp.float64)
+    dHy = xp.array(div, dtype=xp.float64)
+    offset_yx = xp.array(offset_yx, dtype=xp.float64)
 
     if random:
         y, x = random_coords(num_gauss_approx, xp=xp)
@@ -410,8 +412,15 @@ def gauss_beam_rayset(
         dy, dx = y * semi_angle, x * semi_angle
         y, x = y * outer_radius, x * outer_radius
 
+        y += offset_yx[0]
+        x += offset_yx[1]
+
     else:
         y, x = fibonacci_spiral(num_gauss_approx, outer_radius, xp=xp)
+
+        y += offset_yx[0]
+        x += offset_yx[1]
+
         dy, dx = fibonacci_spiral(num_gauss_approx, semi_angle, xp=xp)
 
         # Use random subset parameter to subsample the fibonacci pattern,
@@ -475,11 +484,11 @@ def point_beam(
     return r
 
 
-def calculate_wavelength(phi_0: float):
+def calculate_wavelength(phi_0: float, xp=np):
     return h / (2 * abs(e) * m_e * phi_0) ** (1 / 2)
 
 
-def calculate_phi_0(wavelength: float):
+def calculate_phi_0(wavelength: float, xp=np):
     return h ** 2 / (2 * wavelength ** 2 * abs(e) * m_e)
 
 

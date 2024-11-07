@@ -35,7 +35,8 @@ from .utils import (
     point_beam,
     calculate_direction_cosines,
     calculate_wavelength,
-    get_array_from_device
+    get_array_from_device,
+    initial_r_rayset
 )
 
 if TYPE_CHECKING:
@@ -823,8 +824,10 @@ class GaussBeam(Source):
         self,
         z: float,
         radius: float,
-        wo: float,
+        wo: NDArray,
+        amplitude: NDArray,
         voltage: Optional[float] = None,
+        offset_yx: Tuple[float, float] = (0., 0.),
         tilt_yx: Tuple[float, float] = (0., 0.),
         semi_angle: Optional[float] = 0.,
         name: Optional[str] = None,
@@ -832,10 +835,12 @@ class GaussBeam(Source):
     ):
         super().__init__(name=name, z=z, voltage=voltage)
         self.wo = wo
+        self.amplitude = amplitude
         self.radius = radius
         self.tilt_yx = tilt_yx
         self.semi_angle = semi_angle
         self.random_subset = random_subset
+        self.offset_yx = offset_yx
 
     def get_rays(
         self,
@@ -843,18 +848,27 @@ class GaussBeam(Source):
         random: Optional[bool] = None,
         backend='cpu',
     ) -> Rays:
-        wavelength = calculate_wavelength(self.voltage)
+
+        xp = get_array_module(backend)
+
+        wavelength = calculate_wavelength(self.voltage, xp=xp)
+
+        # Ensure that these variables are on the correct device
+        self.path_length = xp.zeros(num_rays * 5)
+        self.amplitude = xp.array(self.amplitude)
+        self.wo = xp.array(self.wo)
 
         # if random:
         #     raise NotImplementedError
         # else:
-        xp = get_array_module(backend)
+
         r = gauss_beam_rayset(
             num_rays,
             self.radius,
             self.semi_angle,
             self.wo,
             wavelength,
+            offset_yx=self.offset_yx,
             random=random if random is not None else self.random,
             random_subset=self.random_subset,
             xp=xp,
@@ -866,6 +880,8 @@ class GaussBeam(Source):
         return GaussianRays.new(
             **self._rays_args(r, backend=backend),
             wo=self.wo,
+            path_length=self.path_length,
+            amplitude=self.amplitude
         )
 
     @staticmethod
@@ -976,14 +992,13 @@ class Detector(Component):
         # this entire section can be optimised !!!
         return r[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]
 
-    @property
-    def image_dtype(self):
+    def image_dtype(self, xp=np):
         if self.interference is None:
-            return np.int32
+            return xp.int32
         # Setting this next line reduces the bitdepth
         # of the image computation which can improve the speed
         # quite substantially
-        return np.complex128
+        return xp.complex128
 
     def get_image(
         self,
@@ -1007,7 +1022,7 @@ class Detector(Component):
             )
         )
 
-        image_dtype = self.image_dtype
+        image_dtype = self.image_dtype(xp=xp)
         if self.interference == 'ray':
             # If we are doing interference, we add a complex number representing
             # the phase of the ray for now to each pixel.
@@ -1086,17 +1101,18 @@ class Detector(Component):
 
         wo = rays.wo
         wavelength = rays.wavelength
+        amplitude = rays.amplitude
 
         # import pdb
-
+        ()
         div = rays.wavelength / (xp.pi * wo)
         k = float_dtype(2 * xp.pi / wavelength)
-        z_r = float_dtype(xp.pi * wo ** 2 / wavelength)
+        z_r = xp.pi * wo ** 2 / wavelength
 
-        dPx = float_dtype(wo)
-        dPy = float_dtype(wo)
-        dHx = float_dtype(div)
-        dHy = float_dtype(div)
+        dPx = wo
+        dPy = wo
+        dHx = div
+        dHy = div
 
         # rays layout
         # [5, n_rays] where n_rays = 5 * n_gauss
@@ -1147,7 +1163,7 @@ class Detector(Component):
         det_coords = self.get_det_coords_for_gauss_rays(xEnd, yEnd, xp=xp)
         propagate_misaligned_gaussian(
             Qinv, Qpinv, det_coords,
-            p2m, k, A, B, path_length, out.ravel(), xp=xp
+            p2m, k, A, B, amplitude, path_length, out.ravel(), xp=xp
         )
 
     @staticmethod
@@ -1581,7 +1597,7 @@ class Aperture(Component):
         return ApertureGUI
 
 
-class DiffractingPlanes(Component):
+class DiffractingPlane(Component):
     def __init__(
         self,
         z: float,  # z position of the first diffracting plane
@@ -1593,8 +1609,9 @@ class DiffractingPlanes(Component):
         # A mask to apply to the field, so that only certain pixels
         # of the atomic potential field can be diffracted by a gaussian
         atomic_mask: NDArray,
+        atomic_coordinates: NDArray,
+        atomic_indices: NDArray,
         pixel_size: float,
-        shape: Tuple[int, int],
         # rotation: Degrees = 0.,
         # flip_y: bool = False,
         # center: Tuple[float, float] = (0., 0.),
@@ -1603,37 +1620,31 @@ class DiffractingPlanes(Component):
         super().__init__(z=z, name=name)
         self.field = field
         self.atomic_mask = atomic_mask
+        self.atomic_coordinates = atomic_coordinates
+        self.pixel_size = pixel_size
+        self.shape = self.field.shape
 
+    def get_gauss_image(
+        self,
+        rays: GaussianRays,
+        out: NDArray,
+    ) -> NDArray:
 
-    def step(
-        self, rays: GaussianRays,
-    ) -> Generator[Rays, None, None]:
-
-        # Calculate atomic coordinates and indices of mask for this potential slice
-        shape_x, shape_y = self.shape
-        pixel_size = self.pixel_size
-
-        atom_coords_y = np.linspace(0, (shape_y - 1) * pixel_size, shape_y) + pixel_size / 2
-        atom_coords_x = np.linspace(0, (shape_x - 1) * pixel_size, shape_x) + pixel_size / 2
-
-        atom_coords = np.meshgrid(atom_coords_y, atom_coords_x)
-        atom_coords = np.vstack((atom_coords[0].flatten(), atom_coords[1].flatten())).T
-        atom_incds = np.argwhere(self.atomic_mask)
-
-        float_dtype = self.field.real.dtype.type
+        float_dtype = out.real.dtype.type
         xp = rays.xp
 
         wo = rays.wo
         wavelength = rays.wavelength
+        amplitude = rays.amplitude
 
         div = rays.wavelength / (xp.pi * wo)
-        k = float_dtype(2 * xp.pi / wavelength)
-        z_r = float_dtype(xp.pi * wo ** 2 / wavelength)
+        k = 2 * xp.pi / wavelength
+        z_r = xp.pi * wo ** 2 / wavelength
 
-        dPx = float_dtype(wo)
-        dPy = float_dtype(wo)
-        dHx = float_dtype(div)
-        dHy = float_dtype(div)
+        dPx = wo
+        dPy = wo
+        dHx = div
+        dHy = div
 
         # rays layout
         # [5, n_rays] where n_rays = 5 * n_gauss
@@ -1645,6 +1656,9 @@ class DiffractingPlanes(Component):
         # end_rays = rays.data[0:4, :].T
         path_length = rays.path_length[0::5].astype(float_dtype)
 
+        # split_end_rays = xp.split(end_rays, n_gauss, axis=0)
+        # rayset1 = xp.stack(split_end_rays, axis=-1)
+
         rayset1 = xp.moveaxis(
             rays.data[0:4, :].reshape(4, n_gauss, 5),
             -1,
@@ -1655,6 +1669,7 @@ class DiffractingPlanes(Component):
         # rayset1 layout
         # [5g, (x, dx, y, dy), n_gauss]
 
+        # rayset1 = cp.array(rayset1)
         A, B, C, D = differential_matrix(rayset1, dPx, dPy, dHx, dHy, xp=xp)
         # A, B, C, D all have shape (n_gauss, 2, 2)
         Qinv = calculate_Qinv(z_r, n_gauss, xp=xp)
@@ -1665,39 +1680,121 @@ class DiffractingPlanes(Component):
         # if all inputs are stacked in the first dim
         Qpinv = calculate_Qpinv(A, B, C, D, Qinv, xp=xp)
 
-        wp = np.sqrt(wavelength / (np.pi * np.imag(Qpinv[:, 0, 0])))
-        gauss_x, gauss_y = rays.x_central, rays.y_central
+        # det_coords = cp.array(det_coords)
+        # p2m = cp.array(p2m)
+        # path_length = cp.array(path_length)
+        # k = cp.array(k)
 
-        less_than_radius = (
-            (atom_coords[:, 0] - gauss_y) ** 2
-            + (atom_coords[:, 1] - gauss_x) ** 2
-            < wp ** 2
+        phi_x2m = rays.data[1, 0::5]  # slope that central ray arrives at
+        phi_y2m = rays.data[3, 0::5]  # slope that central ray arrives at
+        p2m = xp.array([phi_x2m, phi_y2m]).T.astype(float_dtype)
+
+        xEnd, yEnd = rayset1[0, 0], rayset1[0, 2]
+        # central beam final x , y coords
+        det_coords = self.get_det_coords_for_gauss_rays(xEnd, yEnd, xp=xp)
+        propagate_misaligned_gaussian(
+            Qinv, Qpinv, det_coords,
+            p2m, k, A, B, amplitude, path_length, out.ravel(), xp=xp
         )
-        atom_coords_inside_gauss = atom_coords[less_than_radius]
-        atom_x_inside_gauss = atom_coords_inside_gauss[:, 1]
-        atom_y_inside_gauss = atom_coords_inside_gauss[:, 0]
 
-        atom_incds_inside_gauss = atom_incds[less_than_radius]
+        return out, path_length, k
 
-        r = get_atom_coords_for_gauss_rays(gauss_x, gauss_y, atom_x_inside_gauss, atom_y_inside_gauss, xp=xp)
+    def step(
+        self, rays: GaussianRays,
+    ) -> Generator[Rays, None, None]:
 
-    def get_atom_coords_for_gauss_rays(self, gauss_x, gauss_y, atom_x, atom_y, xp=np):
-        pass*
+        xp = rays.xp
+        field = xp.array(self.field)
+        atomic_coordinates = xp.array(self.atomic_coordinates)
 
-        # det_size_y = self.shape[0] * self.pixel_size
-        # det_size_x = self.shape[1] * self.pixel_size
+        # Calculate atomic coordinates and indices of mask for this potential slice
+        shape = self.field.shape
+        pixel_size = self.pixel_size
 
-        # x_det = xp.linspace(-det_size_y / 2, det_size_y / 2, self.shape[0], dtype=xEnd.dtype)
-        # y_det = xp.linspace(-det_size_x / 2, det_size_x / 2, self.shape[1], dtype=yEnd.dtype)
-        # x, y = xp.meshgrid(x_det, y_det)
+        out = xp.zeros(
+            shape,
+            dtype=xp.complex64,
+        )
 
-        # r = xp.stack((x, y), axis=-1).reshape(-1, 2)
-        # endpoints = xp.stack((xEnd, yEnd), axis=-1)
-        # # r = xp.broadcast_to(r, [n_rays, *r.shape])
-        # # r = xp.swapaxes(r, 0, 1)
-        # # has form (n_px, n_gauss, 2:[x, y])]
-        # # this entire section can be optimised !!!
+        gauss_field, path_length, k = self.get_gauss_image(rays, out)
+
+        scattered_field = gauss_field * field
+
+        rays_x = atomic_coordinates[:, 0]
+        rays_y = atomic_coordinates[:, 1]
+        rays_dx = xp.zeros(len(rays_x))
+        rays_dy = xp.zeros(len(rays_y))
+
+        wo = xp.full(len(rays_x), pixel_size / 2)
+        wavelength = rays.wavelength
+
+        div = wavelength / (xp.pi * wo)
+        dPx = wo
+        dPy = wo
+        dHx = div
+        dHy = div
+
+        # this multiplies n_rays by 5
+        scattered_r = initial_r_rayset(len(rays_x), xp=xp)
+
+        # Central coords
+        scattered_r[0] = xp.repeat(rays_x, 5)
+        scattered_r[2] = xp.repeat(rays_y, 5)
+
+        # Semi Angle addition to each ray
+        scattered_r[1] += xp.repeat(rays_dx, 5)
+        scattered_r[3] += xp.repeat(rays_dy, 5)
+
+        # Offset in x
+        scattered_r[0, 1::5] += dPx
+        # Offset in y
+        scattered_r[2, 2::5] += dPy
+        # Slope in x from origin
+        scattered_r[1, 3::5] += dHx
+        # Slope in y from origin
+        scattered_r[3, 4::5] += dHy
+
+        scattered_r_amplitude = np.abs(scattered_field[np.where(self.atomic_mask)]).ravel()
+        scattered_r_opl = path_length[0] + xp.angle(
+            scattered_field[np.where(self.atomic_mask)]
+        ).ravel() / k
+
+        scattered_r_opl = xp.repeat(scattered_r_opl, 5)
+
+        # rays_data = xp.hstack((rays.data, scattered_r))
+        # rays_opl = xp.hstack((rays.path_length, scattered_r_opl))
+        # rays_amplitude = xp.hstack((rays.amplitude, scattered_r_amplitude))
+        # rays_wo = xp.hstack((rays.wo, wo))
+
+        rays_data = scattered_r
+        rays_opl = scattered_r_opl
+        rays_amplitude = scattered_r_amplitude
+        rays_wo = wo
+
+        new_rays = GaussianRays.new(
+            data=rays_data,
+            amplitude=rays_amplitude,
+            path_length=rays_opl,
+            location=self,
+            wavelength=rays.wavelength,
+            wo=rays_wo,
+        )
+
+        yield new_rays
+
+    def get_det_coords_for_gauss_rays(self, xEnd, yEnd, xp=np):
+        det_size_y = self.shape[0] * self.pixel_size
+        det_size_x = self.shape[1] * self.pixel_size
+
+        x_det = xp.linspace(-det_size_y / 2, det_size_y / 2, self.shape[0], dtype=xEnd.dtype)
+        y_det = xp.linspace(-det_size_x / 2, det_size_x / 2, self.shape[1], dtype=yEnd.dtype)
+        x, y = xp.meshgrid(x_det, y_det)
+
+        r = xp.stack((x, y), axis=-1).reshape(-1, 2)
+        endpoints = xp.stack((xEnd, yEnd), axis=-1)
+
         return r[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]
+
 
 class PotentialSample(Sample):
     def __init__(

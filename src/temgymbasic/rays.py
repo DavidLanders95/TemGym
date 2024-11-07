@@ -47,7 +47,9 @@ class Rays:
         **kwargs,
     ):
         xp = get_xp(data)
+
         num_rays = data.shape[1]
+
         if xp.isscalar(path_length):
             path_length = xp.full((num_rays,), path_length)
         assert len(path_length) == num_rays, (
@@ -125,11 +127,10 @@ class Rays:
     @dy.setter
     def dy(self, yslope):
         self.data[3, :] = yslope
-
     @property
     def num_display(self):
         return self.num
-    
+
     @property
     def x_central(self):
         return self.x
@@ -279,6 +280,7 @@ class Rays:
 
 @dataclass
 class GaussianRays(Rays):
+    amplitude: Optional[NDArray] = None
     wo: Optional[NDArray] = None
 
     @property
@@ -292,7 +294,7 @@ class GaussianRays(Rays):
     @property
     def y_central(self):
         return self.y[0::5]
-    
+
     @property
     def dy_central(self):
         return self.dy[0::5]

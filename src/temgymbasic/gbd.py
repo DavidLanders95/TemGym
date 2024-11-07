@@ -257,6 +257,7 @@ def propagate_misaligned_gaussian(
     k,
     A,
     B,
+    amplitude,
     path_length,
     out,
     xp=np
@@ -280,7 +281,8 @@ def propagate_misaligned_gaussian(
     # (n_gauss,): complex
     guoy = guoy_phase(Qpinv, xp=xp)  # Guoy phase
     # (n_gauss,): complex
-    amplitude = 1.0 * gaussian_amplitude(Qinv, A, B, xp=xp)  # Complex Gaussian amplitude
+    ()
+    new_amplitude = amplitude * gaussian_amplitude(Qinv, A, B, xp=xp)  # Complex Gaussian amplitude
     # (n_gauss,): complex
     aligned *= 1j
     aligned += 1j * misaligned_phase
@@ -289,7 +291,7 @@ def propagate_misaligned_gaussian(
     aligned -= 1j * guoy[xp.newaxis, :]
     xp.exp(aligned, out=aligned)
     # xp.exp(aligned, out=aligned)
-    aligned *= xp.abs(amplitude)
+    aligned *= xp.abs(new_amplitude)
     # It should be possible to avoid this intermediate .sum
     # if we could reduce directly into out, but I can't find
     # a way to express that with numpy. Numba could be an option

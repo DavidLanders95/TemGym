@@ -1306,6 +1306,11 @@ class GaussBeamGUI(SourceGUI):
         self.try_update(geom=True)
 
     @Slot(float)
+    def set_random_subset(self, val):
+        self.beam.random_subset = val
+        self.try_update(geom=False)
+
+    @Slot(float)
     def set_semi_angle(self, val):
         self.beam.semi_angle = val * MRAD
         self.try_update(geom=False)
@@ -1394,6 +1399,13 @@ class GaussBeamGUI(SourceGUI):
 
         self._build_rayslider(into=vbox)
 
+        self.randomsubsetslider, _ = labelled_slider(
+            self.beam.random_subset, 1, self.rayslider.value(), 
+            name='Number of Randomly Chosen Subset Rays in Fibonacci Sampling',
+            insert_into=vbox, decimals=0, tick_interval=100,
+        )
+        self.rayslider.valueChanged.connect(lambda val: self.randomsubsetslider.setMaximum(val))
+        
         self.voltageslider, _ = labelled_slider(
             int(self.beam.phi_0 / 1000), 1, 200,
             name='Voltage (kV)', insert_into=vbox,
