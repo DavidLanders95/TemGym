@@ -281,7 +281,7 @@ def propagate_misaligned_gaussian(
     # (n_gauss,): complex
     guoy = guoy_phase(Qpinv, xp=xp)  # Guoy phase
     # (n_gauss,): complex
-    ()
+
     new_amplitude = amplitude * gaussian_amplitude(Qinv, A, B, xp=xp)  # Complex Gaussian amplitude
     # (n_gauss,): complex
     aligned *= 1j
@@ -296,6 +296,65 @@ def propagate_misaligned_gaussian(
     # if we could reduce directly into out, but I can't find
     # a way to express that with numpy. Numba could be an option
     out += aligned.sum(axis=-1)
+    # return aligned.sum(axis=-1)
+    # (n_px,): complex
+    # return field
+
+
+def propagate_misaligned_gaussian_region(
+    Qinv,
+    Qpinv,
+    r,
+    flat_indices,
+    p2m,
+    k,
+    A,
+    B,
+    amplitude,
+    path_length,
+    out,
+    xp=np
+):
+    # Qinv : (n_gauss, 2, 2), complex
+    # Qpinv : (n_gauss, 2, 2), complex
+    # r: (n_px, n_gauss, 2:[x ,y]), float => det coords relative to final, central pos
+    # p2m: (n_gauss, 2:[x, y]), float => slopes of arriving central ray
+    # k: scalar float
+    # A: (n_gauss, 2, 2), float
+    # B: (n_gauss, 2, 2), float
+    # path_length: (n_gauss,), float => path length of central ray
+
+    misaligned_phase = misalign_phase_plane_wave(r, p2m, k, xp=xp)
+    # (n_px, n_gauss): complex
+    # Phase and Amplitude at transversal plane to beam dir
+
+    aligned = transversal_phase(Qpinv, r, k, xp=xp)
+    # (n_px, n_gauss): complex
+    # opl = xp.exp(1j * k * path_length)  # Optical path length phase
+    # (n_gauss,): complex
+    guoy = guoy_phase(Qpinv, xp=xp)  # Guoy phase
+    # (n_gauss,): complex
+
+    new_amplitude = amplitude * gaussian_amplitude(Qinv, A, B, xp=xp)  # Complex Gaussian amplitude
+    # (n_gauss,): complex
+    aligned *= 1j
+    aligned += 1j * misaligned_phase
+    aligned += 1j * path_length[xp.newaxis, :]
+    aligned *= k
+    aligned -= 1j * guoy[xp.newaxis, :]
+    xp.exp(aligned, out=aligned)
+    # xp.exp(aligned, out=aligned)
+    aligned *= xp.abs(new_amplitude)
+    # It should be possible to avoid this intermediate .sum
+    # if we could reduce directly into out, but I can't find
+    # a way to express that with numpy. Numba could be an option
+
+    out[flat_indices] += aligned.sum(axis=-1)
+
+    # import matplotlib.pyplot as plt
+    # plt.figure()
+    # plt.imshow(np.abs(out.reshape(64, 64)))
+    # plt.show()
     # return aligned.sum(axis=-1)
     # (n_px,): complex
     # return field

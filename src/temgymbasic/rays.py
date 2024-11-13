@@ -78,7 +78,7 @@ class Rays:
     @property
     def component(self) -> Optional['Component']:
         try:
-            return self.location[-1]
+            return self.location
         except TypeError:
             pass
         try:
@@ -134,7 +134,7 @@ class Rays:
     @property
     def x_central(self):
         return self.x
-    
+
     @property
     def dx_central(self):
         return self.dx
@@ -142,7 +142,7 @@ class Rays:
     @property
     def y_central(self):
         return self.y
-    
+
     @property
     def dy_central(self):
         return self.dy

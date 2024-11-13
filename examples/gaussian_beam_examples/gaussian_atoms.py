@@ -9,6 +9,8 @@ import numpy as np
 from temgymbasic.utils import calculate_phi_0, calculate_wavelength
 import ase
 import abtem
+from matplotlib.patches import Circle
+from ase.cluster import Decahedron
 
 def FresnelPropagator(E0, ps, lambda0, z):
     """
@@ -39,30 +41,26 @@ def FresnelPropagator(E0, ps, lambda0, z):
     
     return Ef
 
+
 def zero_phase(u, idx_x):
     u_centre = u[idx_x]
-    phase_difference =  0 - np.angle(u_centre)
+    phase_difference = 0 - np.angle(u_centre)
     u = u * np.exp(1j * phase_difference)
     return u
 
-# Configure potential
-phi_0 = 100e3
 
-wavelength = calculate_wavelength(phi_0) * 1e10
+# Configure potential
+phi = 100e3
+
+wavelength = calculate_wavelength(phi) * 1e10
 n_rays = 1
 
 k = 2 * np.pi / wavelength
 
 wavelengths = np.full(n_rays, wavelength)
+pixel_size = 0.3
 
-size = 128
-det_shape = (size, size)
-pixel_size = 0.5
-dsize = det_shape[0] * pixel_size
-
-x_det = np.linspace(-dsize / 2, dsize / 2, size)
-
-wo = 2
+wo = 3
 wos = np.full(n_rays, wo)
 
 amplitude = np.ones(n_rays)
@@ -84,79 +82,62 @@ tilt_yx = np.tan(deg_yx)
 x0 = 0
 y0 = 0
 
-prop_dist = 500
-
-num_atoms_x = 1
-num_atoms_y = 1
-atom_spacing = dsize/2
-x_start = dsize/2
-y_start = dsize/2
+prop_dist = 1
 
 z_start = 5000
 z_atoms = prop_dist
 
-# Create an empty Atoms object
-atoms = ase.Atoms('Si0', cell=[x_start + num_atoms_x * atom_spacing,
-                               y_start + num_atoms_y * atom_spacing,
-                               z_start])
+# sampling = pixel_size
+# unit_cell = ase.build.bulk("Au", cubic=True)
+# atoms = unit_cell * (10, 10, 10)
+# potential = abtem.Potential(
+#     atoms,
+#     slice_thickness=1,
+#     sampling=sampling,
+#     projection="infinite",
+# )
 
-# Adding atoms in a row
-for i in range(num_atoms_x):
-    for j in range(num_atoms_y):
-        x_position = x_start + i * atom_spacing + 4
-        y_position = y_start + j * atom_spacing + 4
-        atoms += ase.Atoms('Si1', positions=[(x_position, y_position, z_atoms)])
+cluster = Decahedron("Cu", 9, 2, 0)
+cluster.rotate("x", -30)
+substrate = ase.build.bulk("C", cubic=True)
 
-atom_positions = np.array([[4, 4]])
+# repeat diamond structure
+substrate *= (12, 12, 10)
 
-potential = abtem.Potential(atoms, sampling=pixel_size, projection="infinite",
-                            slice_thickness=prop_dist)
-phase_shift = np.asarray(potential.build().compute().transmission_function(phi_0).compute().array[1])
+# displace atoms with a standard deviation of 50 % of the bond length
+bondlength = 1.54  # Bond length
+substrate.positions[:] += np.random.randn(len(substrate), 3) * 0.5 * bondlength
 
-npix = phase_shift.shape[0]
-extent = [0 - dsize / 2, 0 + dsize / 2, 0 - dsize / 2, 0 + dsize/2]
+# wrap the atoms displaced outside the cell back into the cell
+substrate.wrap()
 
-# Map atom positions to pixel indices
-def world_to_pixel(atom_positions, extent, shape):
-    x_world = atom_positions[:, 0]
-    y_world = atom_positions[:, 1]
-    nx, ny = shape[1], shape[0]
+translated_cluster = cluster.copy()
 
-    pixel_coords_x = np.round((x_world / pixel_size) + (nx // 2)).astype(int)
-    pixel_coords_y = np.round((y_world / pixel_size) + (ny // 2)).astype(int)
+translated_cluster.cell = substrate.cell
+translated_cluster.center()
+translated_cluster.translate((0, 0, -25))
 
-    return pixel_coords_y, pixel_coords_x
+atoms = substrate + translated_cluster
 
-# Map atom positions to pixel indices
-y_indices, x_indices = world_to_pixel(atom_positions, extent, phase_shift.shape)
+atoms.center(axis=2, vacuum=2)
 
-# Initialize mask
-mask = np.zeros_like(phase_shift, dtype=np.int8)
+slice_thickness = 100
+potential = abtem.Potential(
+    atoms,
+    gpts=128,
+    slice_thickness=slice_thickness,
+)
 
-# Create masks around each atom
-yy, xx = np.indices(phase_shift.shape)
-r = wo * 4 # Radius of the circular shape in pixels
+pixel_size = potential.sampling[0]
+phase_shift = np.asarray(potential.build().compute().transmission_function(phi).compute().array)#[np.newaxis, ...]
+# phase_shift = np.sum(phase_shift, axis=0)
+npix = phase_shift.shape[1]
+det_shape = (npix, npix)
 
-for yi, xi in zip(y_indices, x_indices):
-    distance = (xx - xi) ** 2 + (yy - yi) ** 2
-    mask[distance <= r ** 2] = 1
-    indices = np.argwhere(mask == 1)
-    y_indices, x_indices = indices[:, 0], indices[:, 1]
+print(phase_shift.shape)
+# extent = [0 - dsize / 2, 0 + dsize / 2, 0 - dsize / 2, 0 + dsize/2]
 
-    # Convert pixel indices to world coordinates
-    x_min, x_max, y_min, y_max = extent
-    nx, ny = mask.shape[1], mask.shape[0]
-
-    x_world = x_indices * pixel_size - (nx // 2) * pixel_size + pixel_size / 2
-    y_world = y_indices * pixel_size - (ny // 2) * pixel_size + pixel_size / 2
-
-    mask_coords = np.column_stack((x_world, y_world))
-    mask_indices = np.column_stack((x_indices, y_indices))
-
-plt.figure()
-plt.imshow(mask, extent=extent, cmap='gray')
-
-field = phase_shift * mask
+field = phase_shift
 
 components = (
     comp.GaussBeam(
@@ -167,7 +148,7 @@ components = (
         amplitude=amplitude,
         tilt_yx=tilt_yx,
         random_subset=n_rays,
-        offset_yx=(4, 4)
+        offset_yx=(0, 4)
     ),
     comp.Detector(
         z=z_atoms,
@@ -180,8 +161,16 @@ model = Model(components, backend='gpu')
 rays = tuple(model.run_iter(num_rays=n_rays))
 gbd_input_field = model.detector.get_image(rays[-1])
 
-scattered_field = gbd_input_field * phase_shift
-detector_field = FresnelPropagator(scattered_field, pixel_size, wavelength, prop_dist)
+gaussian_wave = abtem.Waves(
+    array=gbd_input_field.copy(), energy=phi, sampling=pixel_size
+)
+
+exit_wave = gaussian_wave.multislice(potential)
+exit_wave.compute()
+detector_field = exit_wave.complex_images().array
+
+# scattered_field = gbd_input_field * phase_shift
+# detector_field = FresnelPropagator(scattered_field, pixel_size, wavelength, prop_dist)
 
 components = (
     comp.GaussBeam(
@@ -192,14 +181,12 @@ components = (
         amplitude=amplitude,
         tilt_yx=tilt_yx,
         random_subset=n_rays,
-        offset_yx=(4, 4)
+        offset_yx=(0, 4)
     ),
-    comp.DiffractingPlane(
+    comp.DiffractingPlanes(
         z=z_atoms,
         field=field,
-        atomic_mask=mask,
-        atomic_coordinates=mask_coords,
-        atomic_indices=mask_indices,
+        z_step=slice_thickness,
         pixel_size=pixel_size,
     ),
     comp.Detector(
@@ -213,36 +200,49 @@ model = Model(components, backend='gpu')
 rays = tuple(model.run_iter(num_rays=n_rays))
 gbd_output_field = model.detector.get_image(rays[-1])
 
-fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+fig, axs = plt.subplots(3, 2, figsize=(10, 15))
 
+# First row
 axs[0, 0].imshow(np.abs(gbd_input_field), cmap='gray')
 axs[0, 0].set_title('Input Field')
 
-axs[0, 1].imshow(np.angle(phase_shift) * mask, extent=extent, cmap='gray')
-axs[0, 1].scatter(x_world, -y_world, marker=',', color='red', alpha=0.1)
-axs[0, 1].set_title('Phase Shift with Mask')
+axs[0, 1].imshow(np.angle(np.sum(phase_shift, axis=0)), cmap='gray')
+# circle = Circle((0, 0), radius=4, edgecolor='red', facecolor='none')
+# axs[0, 1].add_patch(circle)
+axs[0, 1].set_title('Potential Phase')
 
+# Second row
 axs[1, 0].imshow(np.abs(detector_field), cmap='gray')
-axs[1, 0].set_title('Multislice Method')
+axs[1, 0].set_title('Multislice Method Amplitude')
 
 axs[1, 1].imshow(np.abs(gbd_output_field), cmap='gray')
-axs[1, 1].set_title('GBD Method')
-# Plot cross sections
-central_pixel = size // 2
+axs[1, 1].set_title('GBD Method Amplitude')
+
+# Third row showing phase images
+axs[2, 0].imshow(np.angle(detector_field), cmap='gray')
+axs[2, 0].set_title('Multislice Method Phase')
+
+axs[2, 1].imshow(np.angle(gbd_output_field), cmap='gray')
+axs[2, 1].set_title('GBD Method Phase')
+
+plt.tight_layout()
+
+# # Plot cross sections
+central_pixel = det_shape[0] // 2
 
 fig, axs = plt.subplots(2, 1, figsize=(10, 10))
 
 # Normalize the fields between 0 and 1
-detector_field_magnitude = np.abs(detector_field[central_pixel, :])
-gbd_output_field_magnitude = np.abs(gbd_output_field[central_pixel, :])
+detector_field_amplitude = np.abs(detector_field[central_pixel, :])
+gbd_output_field_amplitude = np.abs(gbd_output_field[central_pixel, :])
 
-detector_field_magnitude /= np.max(detector_field_magnitude)
-gbd_output_field_magnitude /= np.max(gbd_output_field_magnitude)
+detector_field_amplitude /= np.max(detector_field_amplitude)
+gbd_output_field_amplitude /= np.max(gbd_output_field_amplitude)
 
-axs[0].set_xlim(-size/2, size/2)
-axs[0].plot(detector_field_magnitude, label='Multislice Method')
-axs[0].plot(gbd_output_field_magnitude, label='GBD Method')
-axs[0].set_title('Cross Section Magnitude')
+# axs[0].set_xlim(-size, size)
+axs[0].plot(detector_field_amplitude, label='Multislice Method')
+axs[0].plot(gbd_output_field_amplitude, label='GBD Method')
+axs[0].set_title('Cross Section Amplitude')
 axs[0].legend()
 
 detector_field_phase = zero_phase(detector_field[central_pixel, :], central_pixel)
@@ -252,9 +252,6 @@ axs[1].plot(np.angle(detector_field_phase), label='Multislice Method')
 axs[1].plot(np.angle(gbd_output_field_phase), label='GBD Method')
 axs[1].set_title('Cross Section Phase')
 axs[1].legend()
-
-plt.tight_layout()
-plt.show()
 
 plt.tight_layout()
 plt.show()
