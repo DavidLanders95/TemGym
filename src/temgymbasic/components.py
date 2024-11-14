@@ -1612,11 +1612,10 @@ class DiffractingPlanes(Component):
         self.pixel_size = pixel_size
         self.shape = self.field.shape[1:]
 
-    def get_init_gauss_image(
+    def get_gauss_image(
         self,
         rays: GaussianRays,
         out: NDArray,
-        mask_radius_scale: int,
     ) -> NDArray:
 
         float_dtype = out.real.dtype.type
@@ -1659,9 +1658,6 @@ class DiffractingPlanes(Component):
         Qinv = calculate_Qinv(z_r, n_gauss, xp=xp)
         Qpinv = calculate_Qpinv(A, B, C, D, Qinv, xp=xp)
 
-        wnew = xp.sqrt(wavelength / (xp.pi * xp.abs(Qpinv[:, 0, 0].imag)))
-
-        mask_radius = mask_radius_scale * wnew
         phi_x2m = rays.data[1, 0::5]  # slope that central ray arrives at
         phi_y2m = rays.data[3, 0::5]  # slope that central ray arrives at
         p2m = xp.array([phi_x2m, phi_y2m]).T.astype(float_dtype)
@@ -1671,91 +1667,14 @@ class DiffractingPlanes(Component):
 
         # Compute coordinates of detector points within mask radius
         det_coords = self.grid_coords[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]   # pixel coordinates centred on end point of ray
-        distance = xp.linalg.norm(det_coords, axis=-1)
-        mask = (distance < mask_radius)[:, 0]
-
-        det_coords = det_coords[mask]
-        ray_coords = det_coords + endpoints
-
-        # Detector dimensions
-        sy, sx = self.shape
-        pixel_size = self.pixel_size
-
-        # Convert detector coordinates to pixel indices
-        pixel_coords_x = ((det_coords[:, :, 0] + (sy * pixel_size) / 2) / pixel_size).astype(int)
-        pixel_coords_y = ((det_coords[:, :, 1] + (sx * pixel_size) / 2) / pixel_size).astype(int)
-
-        # Ensure indices are within bounds
-        pixel_coords_x = xp.clip(pixel_coords_x, 0, sx - 1)
-        pixel_coords_y = xp.clip(pixel_coords_y, 0, sy - 1)
-
-        # Compute flat indices
-        flat_indices = xp.ravel_multi_index((pixel_coords_y, pixel_coords_x), dims=(sy, sx))[:, 0]
-
-        print(flat_indices.shape)
 
         # Call propagate_misaligned_gaussian and get contributions
-        propagate_misaligned_gaussian_region(
-                Qinv, Qpinv, det_coords, flat_indices,
+        propagate_misaligned_gaussian(
+                Qinv, Qpinv, det_coords,
                 p2m, k, A, B, amplitude, path_length, out.ravel(), xp=xp
         )
 
-        return out, ray_coords, path_length, flat_indices
-
-    def get_gauss_image(
-        self,
-        rays: GaussianRays,
-        out: NDArray,
-        ray_coords: NDArray,
-        flat_indices: NDArray,
-    ) -> NDArray:
-
-        float_dtype = out.real.dtype.type
-        xp = rays.xp
-
-        wo = rays.wo
-        wavelength = rays.wavelength
-        amplitude = rays.amplitude
-
-        div = rays.wavelength / (xp.pi * wo)
-        k = 2 * xp.pi / wavelength
-        z_r = xp.pi * wo ** 2 / wavelength
-
-        dPx = wo
-        dPy = wo
-        dHx = div
-        dHy = div
-
-        n_gauss = rays.num // 5
-
-        path_length = rays.path_length[0::5].astype(float_dtype)
-
-        rayset1 = xp.moveaxis(
-            rays.data[0:4, :].reshape(4, n_gauss, 5),
-            -1,
-            0,
-        )
-        rayset1 = rayset1.astype(float_dtype)
-
-        A, B, C, D = differential_matrix(rayset1, dPx, dPy, dHx, dHy, xp=xp)
-        Qinv = calculate_Qinv(z_r, n_gauss, xp=xp)
-        Qpinv = calculate_Qpinv(A, B, C, D, Qinv, xp=xp)
-
-        phi_x2m = rays.data[1, 0::5]  # slope that central ray arrives at
-        phi_y2m = rays.data[3, 0::5]  # slope that central ray arrives at
-        p2m = xp.array([phi_x2m, phi_y2m]).T.astype(float_dtype)
-
-        xEnd, yEnd = rayset1[0, 0], rayset1[0, 2]
-        endpoints = xp.stack((xEnd, yEnd), axis=-1)
-
-        det_coords = ray_coords - endpoints[xp.newaxis, ...]
-        # Call propagate_misaligned_gaussian and get contributions
-        propagate_misaligned_gaussian_region(
-                Qinv, Qpinv, det_coords, flat_indices,
-                p2m, k, A, B, amplitude, path_length, out.ravel(), xp=xp
-        )
-
-        return out, path_length
+        return out, self.grid_coords[:, xp.newaxis, :]
 
     def step(
         self, rays: GaussianRays,
@@ -1778,20 +1697,12 @@ class DiffractingPlanes(Component):
 
         for i in range(0, num_slices):
 
-            if i == 0:
-                gauss_field, ray_coords, path_length, flat_indices = self.get_init_gauss_image(
-                    rays,
-                    out,
-                    mask_radius_scale=3,
-                )
-            else:
-                gauss_field, path_length = self.get_gauss_image(rays, out, ray_coords, flat_indices)
+            gauss_field, det_coords = self.get_gauss_image(rays, out)
 
-            print(path_length.shape)
             scattered_field = gauss_field * field[i]
 
-            rays_x = ray_coords[:, :, 0]
-            rays_y = ray_coords[:, :, 1]
+            rays_x = det_coords[:, :, 0]
+            rays_y = det_coords[:, :, 1]
             rays_dx = xp.zeros(len(rays_x))
             rays_dy = xp.zeros(len(rays_y))
 
@@ -1811,8 +1722,8 @@ class DiffractingPlanes(Component):
             # Central coords
             scattered_r[0] = xp.repeat(rays_x, 5)
             scattered_r[2] = xp.repeat(rays_y, 5)
-            scattered_r[1] += xp.repeat(rays_dx, 5)
-            scattered_r[3] += xp.repeat(rays_dy, 5)
+            scattered_r[1] = xp.repeat(rays_dx, 5)
+            scattered_r[3] = xp.repeat(rays_dy, 5)
 
             # Offset in x
             scattered_r[0, 1::5] += dPx
@@ -1823,8 +1734,8 @@ class DiffractingPlanes(Component):
             # Slope in y from origin
             scattered_r[3, 4::5] += dHy
 
-            scattered_r_amplitude = xp.abs(scattered_field.ravel()[flat_indices])
-            scattered_r_opl = path_length + xp.angle(scattered_field.ravel()[flat_indices]).ravel() / k
+            scattered_r_amplitude = xp.abs(scattered_field.ravel())
+            scattered_r_opl = xp.angle(scattered_field.ravel()) / k
             scattered_r_opl = xp.repeat(scattered_r_opl, 5)
 
             rays_data = scattered_r
@@ -1841,7 +1752,10 @@ class DiffractingPlanes(Component):
                 wo=rays_wo,
             )
 
-            rays = rays.propagate(20)
+            if i < num_slices - 1:
+                rays = rays.propagate(self.z_step)
+
+            print(rays_opl)
 
         yield rays
 

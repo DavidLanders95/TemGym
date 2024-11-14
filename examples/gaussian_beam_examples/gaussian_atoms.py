@@ -58,9 +58,9 @@ n_rays = 1
 k = 2 * np.pi / wavelength
 
 wavelengths = np.full(n_rays, wavelength)
-pixel_size = 0.3
+pixel_size = 0.1
 
-wo = 3
+wo = 2
 wos = np.full(n_rays, wo)
 
 amplitude = np.ones(n_rays)
@@ -82,19 +82,20 @@ tilt_yx = np.tan(deg_yx)
 x0 = 0
 y0 = 0
 
-prop_dist = 1
+prop_dist = 1e-11
 
 z_start = 5000
 z_atoms = prop_dist
 
+slice_thickness = 100
 # sampling = pixel_size
 # unit_cell = ase.build.bulk("Au", cubic=True)
 # atoms = unit_cell * (10, 10, 10)
 # potential = abtem.Potential(
 #     atoms,
-#     slice_thickness=1,
+#     slice_thickness=slice_thickness,
 #     sampling=sampling,
-#     projection="infinite",
+#     # projection="infinite",
 # )
 
 cluster = Decahedron("Cu", 9, 2, 0)
@@ -121,7 +122,7 @@ atoms = substrate + translated_cluster
 
 atoms.center(axis=2, vacuum=2)
 
-slice_thickness = 100
+
 potential = abtem.Potential(
     atoms,
     gpts=128,
@@ -129,7 +130,7 @@ potential = abtem.Potential(
 )
 
 pixel_size = potential.sampling[0]
-phase_shift = np.asarray(potential.build().compute().transmission_function(phi).compute().array)#[np.newaxis, ...]
+phase_shift = np.asarray(potential.build().compute().transmission_function(phi).compute().array)
 # phase_shift = np.sum(phase_shift, axis=0)
 npix = phase_shift.shape[1]
 det_shape = (npix, npix)
@@ -148,7 +149,7 @@ components = (
         amplitude=amplitude,
         tilt_yx=tilt_yx,
         random_subset=n_rays,
-        offset_yx=(0, 4)
+        offset_yx=(0, 0)
     ),
     comp.Detector(
         z=z_atoms,
@@ -181,7 +182,7 @@ components = (
         amplitude=amplitude,
         tilt_yx=tilt_yx,
         random_subset=n_rays,
-        offset_yx=(0, 4)
+        offset_yx=(0, 0)
     ),
     comp.DiffractingPlanes(
         z=z_atoms,
