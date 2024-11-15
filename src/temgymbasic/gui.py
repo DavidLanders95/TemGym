@@ -1175,7 +1175,7 @@ class SourceGUI(ComponentGUIWrapper):
         num_rays = 1
 
         self.rayslider, self.raysliderbox = labelled_slider(
-            num_rays, 1, 4000, name="Number of Rays", tick_interval=64,
+            num_rays, 1, 1e6, name="Number of Rays", tick_interval=64,
             insert_into=into,
         )
         self.rayslider.valueChanged.connect(self.try_update_slot)
@@ -1400,7 +1400,7 @@ class GaussBeamGUI(SourceGUI):
         self._build_rayslider(into=vbox)
 
         self.randomsubsetslider, _ = labelled_slider(
-            self.beam.random_subset, 1, self.rayslider.value(), 
+            self.beam.random_subset, 1, self.rayslider.value(),
             name='Number of Randomly Chosen Subset Rays in Fibonacci Sampling',
             insert_into=vbox, decimals=0, tick_interval=100,
         )
@@ -1494,10 +1494,10 @@ class PointBeamGUI(SourceGUI):
         self.beamsemiangleslider, _ = labelled_slider(
             beam_semi_angle,
             0.0001,
-            0.3,
+            0.1,
             name='Point Beam Semi Angle',
             insert_into=vbox,
-            decimals=3,
+            decimals=5,
         )
         self.beamsemiangleslider.valueChanged.connect(self.set_semi_angle)
 
@@ -1546,6 +1546,165 @@ class SampleGUI(GridGeomMixin, ComponentGUIWrapper):
 
     def build(self):
         return self
+
+
+class AttenuatingSampleGUI(ComponentGUIWrapper):
+
+    @property
+    def faces(self):
+        _faces = np.array([
+            [0, 1, 2], [0, 2, 3],   # Bottom face
+            [4, 5, 6], [4, 6, 7],   # Top face
+            [0, 1, 5], [0, 5, 4],   # Front face
+            [1, 2, 6], [1, 6, 5],   # Right face
+            [2, 3, 7], [2, 7, 6],   # Back face
+            [3, 0, 4], [3, 4, 7],   # Left face
+        ])
+        return _faces
+
+    @property
+    def attenuating_sample(self) -> 'comp.AttenuatingSample':
+        return self.component
+
+    def build(self):
+        vbox = QVBoxLayout()
+        self.box = vbox
+
+        # Tilt Slider
+        # self.tilt_slider, _ = labelled_slider(
+        #     0,
+        #     -20,
+        #     20,
+        #     name='Tilt (mrad)',
+        #     insert_into=vbox,
+        #     decimals=5,
+        # )
+
+        # self.tilt_slider.valueChanged.connect(self.set_tilt_y)
+
+        return self
+
+    # def set_tilt_y(self, value):
+    #     tilt_radians_x = self.attenuating_sample._tilt_angles_rad_yx[1]
+    #     tilt_radians_y = value
+    #     self.attenuating_sample.tilt_angles_rad_yx = (tilt_radians_y, tilt_radians_x)
+    #     self.try_update(geom=True)
+
+    def get_geom(self):
+        edges = self._get_edges()
+
+        lines = []
+        for edge in edges:
+            line = gl.GLLinePlotItem(
+                pos=np.array(edge),
+                color=(1, 1, 1, 1),
+                width=1,
+                antialias=True,
+            )
+            lines.append(line)
+
+        self.geom = lines
+        return self.geom
+
+    def _get_edges(self):
+        # Define the cube vertices based on the sample parameters
+        x_width = self.attenuating_sample.x_width
+        y_width = self.attenuating_sample.y_width
+        thickness = self.attenuating_sample.thickness
+        center_yx = self.attenuating_sample.centre_yx
+        z = Z_ORIENT * self.attenuating_sample.z
+
+        # Define the 8 vertices of the cube
+        vertices = np.array([
+            [center_yx[1] - x_width / 2, center_yx[0] - y_width / 2, z],
+            [center_yx[1] + x_width / 2, center_yx[0] - y_width / 2, z],
+            [center_yx[1] + x_width / 2, center_yx[0] + y_width / 2, z],
+            [center_yx[1] - x_width / 2, center_yx[0] + y_width / 2, z],
+            [center_yx[1] - x_width / 2, center_yx[0] - y_width / 2, z + thickness],
+            [center_yx[1] + x_width / 2, center_yx[0] - y_width / 2, z + thickness],
+            [center_yx[1] + x_width / 2, center_yx[0] + y_width / 2, z + thickness],
+            [center_yx[1] - x_width / 2, center_yx[0] + y_width / 2, z + thickness],
+        ])
+
+        # # Apply rotations
+        # tilt_y, tilt_x = self.attenuating_sample.tilt_angles_rad_yx
+
+        # Rx = np.array([
+        #     [1, 0, 0],
+        #     [0, np.cos(tilt_x), -np.sin(tilt_x)],
+        #     [0, np.sin(tilt_x), np.cos(tilt_x)],
+        # ])
+        # Ry = np.array([
+        #     [np.cos(tilt_y), 0, np.sin(tilt_y)],
+        #     [0, 1, 0],
+        #     [-np.sin(tilt_y), 0, np.cos(tilt_y)],
+        # ])
+        # # Total rotation matrix
+        # R = Ry @ Rx
+
+        # Center the vertices around the sample center for rotation
+        center = np.array([center_yx[1], center_yx[0], z + thickness / 2])
+        vertices -= center
+        # Apply rotation
+        vertices = vertices #@ R.T
+        # Translate back
+        vertices += center
+
+        # Define the edges of the cube
+        edges = [
+            [vertices[0], vertices[1]],
+            [vertices[1], vertices[2]],
+            [vertices[2], vertices[3]],
+            [vertices[3], vertices[0]],
+            [vertices[4], vertices[5]],
+            [vertices[5], vertices[6]],
+            [vertices[6], vertices[7]],
+            [vertices[7], vertices[4]],
+            [vertices[0], vertices[4]],
+            [vertices[1], vertices[5]],
+            [vertices[2], vertices[6]],
+            [vertices[3], vertices[7]],
+        ]
+
+        # Create line plots for each edge
+        # lines = []
+        # for edge in edges:
+        #     line = gl.GLLinePlotItem(
+        #         pos=np.array(edge),
+        #         color=(1, 1, 1, 1),
+        #         width=1,
+        #         antialias=True,
+        #     )
+        #     lines.append(line)
+
+        # # Create a mesh item for the cube faces
+        # mesh = gl.GLMeshItem(
+        #     vertexes=vertices,
+        #     faces=self.faces,
+        #     faceColors=None,
+        #     drawEdges=False,
+        #     smooth=False,
+        #     shader='shaded',
+        #     glOptions='opaque',
+        # )
+
+        # self.geom = lines
+        # Return both lines and mesh
+        return edges
+
+    def update_geometry(self):
+
+        edges = self._get_edges()
+
+        for idx, geom_item in enumerate(self.geom):
+            geom_item.setData(
+                pos=edges[idx],
+            )
+            # elif isinstance(geom_item, gl.GLMeshItem):
+            #     geom_item.setMeshData(
+            #         vertexes=geom_item.vertexes,
+            #         faces=geom_item.faces,
+            #     )
 
 
 class STEMSampleGUI(SampleGUI):
@@ -2127,7 +2286,7 @@ class DetectorGUI(GridGeomMixin, ComponentGUIWrapper):
             self.detector.interference = 'gauss'
             self.detector.buffer = None
         else:
-            self.detector.interference = None
+            self.detector.interference = 'ray'
             self.detector.buffer = None
         self.try_update()
 

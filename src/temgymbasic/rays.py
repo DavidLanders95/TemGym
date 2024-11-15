@@ -30,6 +30,7 @@ class Rays:
     data: NDArray
     location: LocationT
     path_length: NDArray
+    amplitude: Union[float, NDArray] = 1.
     wavelength: Optional[float] = None
     mask: Optional[NDArray] = None
     blocked: Optional[NDArray] = None
@@ -43,6 +44,7 @@ class Rays:
         data: NDArray,
         location: LocationT,
         wavelength: Optional[float] = None,
+        amplitude: Union[float, NDArray] = 1.,
         path_length: Union[float, NDArray] = 0.,
         **kwargs,
     ):
@@ -52,14 +54,21 @@ class Rays:
 
         if xp.isscalar(path_length):
             path_length = xp.full((num_rays,), path_length)
-        assert len(path_length) == num_rays, (
+        assert path_length.size == num_rays, (
             "path_length must be a scalar or an array of the same length as the number of rays"
+        )
+
+        if xp.isscalar(amplitude):
+            amplitude = xp.full((num_rays,), amplitude)
+        assert amplitude.size == num_rays, (
+            "amplitude must be a scalar or an array of the same length as the number of rays"
         )
 
         return cls(
             data=data,
             location=location,
             path_length=path_length,
+            amplitude=amplitude,
             wavelength=wavelength,
             **kwargs,
         )
@@ -78,7 +87,7 @@ class Rays:
     @property
     def component(self) -> Optional['Component']:
         try:
-            return self.location
+            return self.location[-1]
         except TypeError:
             pass
         try:

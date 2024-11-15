@@ -12,6 +12,15 @@ import abtem
 from matplotlib.patches import Circle
 from ase.cluster import Decahedron
 
+def GaussianPropagator(E0, ps, lambda0, z):
+    rayleigh_range = np.pi * (ps/2)**2 / lambda0
+    w_z = beam_waist * np.sqrt(1 + (z / rayleigh_range)**2)  # Beam waist at z
+    gaussian_amplitude = np.exp(-((x**2 + y**2) / w_z**2))
+    gaussian_phase = np.exp(-1j * k * (x**2 + y**2) / (2 * R))
+    H = np.exp(-1j * (2 * np.pi / lambda0) * z) * gaussian_amplitude * gaussian_phase
+
+
+
 def FresnelPropagator(E0, ps, lambda0, z):
     """
     Parameters:
@@ -33,12 +42,12 @@ def FresnelPropagator(E0, ps, lambda0, z):
     fx = np.fft.fftfreq(n, ps)
     fy = np.fft.fftfreq(m, ps)
     Fx, Fy = np.meshgrid(fx, fy)
-    
+
     H = np.exp(-1j * (2 * np.pi / lambda0) * z) * np.exp(-1j * np.pi * lambda0 * z * (Fx**2 + Fy**2))
     E0fft = np.fft.fft2(E0)
     G = H * E0fft
     Ef = np.fft.ifft2(G)
-    
+
     return Ef
 
 

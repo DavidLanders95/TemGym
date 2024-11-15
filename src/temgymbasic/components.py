@@ -9,6 +9,7 @@ from dataclasses import dataclass, astuple
 import numpy as np
 from numpy.typing import NDArray  # Assuming np is an alias for numpy
 from scipy.constants import c, e, m_e
+from scipy.interpolate import RegularGridInterpolator
 
 from . import (
     UsageError,
@@ -185,8 +186,8 @@ class Lens(Component):
         elif z1 and z2 and not (f or m):
             f = (1 / z2 - 1 / z1) ** -1
             m = z2 / z1
-        elif f and z1 and not (z2 or m):
-            z2 = (1 / f + 1 / z1) ** -1
+        elif f and z2 and not (z1 or m):
+            z1 = (1 / f - 1 / z2) ** -1
             m = z2 / z1
         else:
             raise InvalidModelError("Lens must have defined: f and m, or z1 and z2, or f and z2")
@@ -827,16 +828,18 @@ class GaussBeam(Source):
         radius: float,
         wo: NDArray,
         amplitude: NDArray,
+        path_length: float = 0.,
         voltage: Optional[float] = None,
         offset_yx: Tuple[float, float] = (0., 0.),
         tilt_yx: Tuple[float, float] = (0., 0.),
         semi_angle: Optional[float] = 0.,
         name: Optional[str] = None,
-        random_subset: Optional[int] = None,
+        random_subset: Optional[int] = 1,
     ):
         super().__init__(name=name, z=z, voltage=voltage)
         self.wo = wo
         self.amplitude = amplitude
+        self.path_length = path_length
         self.radius = radius
         self.tilt_yx = tilt_yx
         self.semi_angle = semi_angle
@@ -855,9 +858,7 @@ class GaussBeam(Source):
         wavelength = calculate_wavelength(self.voltage, xp=xp)
 
         # Ensure that these variables are on the correct device
-        self.path_length = xp.zeros(num_rays * 5)
-        self.amplitude = xp.array(self.amplitude)
-        self.wo = xp.array(self.wo)
+        wo = xp.array(self.wo)
 
         # if random:
         #     raise NotImplementedError
@@ -867,7 +868,7 @@ class GaussBeam(Source):
             num_rays,
             self.radius,
             self.semi_angle,
-            self.wo,
+            wo,
             wavelength,
             offset_yx=self.offset_yx,
             random=random if random is not None else self.random,
@@ -993,6 +994,7 @@ class Detector(Component):
         # this entire section can be optimised !!!
         return r[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]
 
+
     def image_dtype(self, xp=np):
         if self.interference is None:
             return xp.int32
@@ -1028,8 +1030,13 @@ class Detector(Component):
             # If we are doing interference, we add a complex number representing
             # the phase of the ray for now to each pixel.
             # Amplitude is 1.0 for now for each complex ray.
-            wavefronts = 1.0 * xp.exp(-1j * (2 * xp.pi / rays.wavelength) * rays.path_length)
-            valid_wavefronts = wavefronts[mask]
+            wavefronts = rays.amplitude * xp.exp(-1j * (2 * xp.pi / rays.wavelength) * rays.path_length)
+
+            if isinstance(rays, GaussianRays):
+                valid_wavefronts = wavefronts[0::5][mask]
+            else:
+                valid_wavefronts = wavefronts[mask]
+            
             # image_dtype = valid_wavefronts.dtype
         elif self.interference == 'gauss':
             pass
@@ -1122,7 +1129,7 @@ class Detector(Component):
 
         # end_rays = rays.data[0:4, :].T
         path_length = rays.path_length[0::5].astype(float_dtype)
-
+        amplitude = rays.amplitude[0::5].astype(float_dtype)
         # split_end_rays = xp.split(end_rays, n_gauss, axis=0)
         # rayset1 = xp.stack(split_end_rays, axis=-1)
 
@@ -1148,7 +1155,6 @@ class Detector(Component):
         # if all inputs are stacked in the first dim
         Qpinv = calculate_Qpinv(A, B, C, D, Qinv, xp=xp)
         wnew = xp.sqrt(wavelength / (xp.pi * xp.abs(Qpinv[:, 0, 0].imag)))
-        print(wnew)
         # det_coords = cp.array(det_coords)
         # p2m = cp.array(p2m)
         # path_length = cp.array(path_length)
@@ -1209,9 +1215,10 @@ class AccumulatingDetector(Detector):
 
     def reset_buffer(self, rays: Rays):
         xp = rays.xp
+        image_dtype = self.image_dtype(xp=xp)
         self.buffer = xp.zeros(
             (self.buffer_length, *self.shape),
-            dtype=self.image_dtype,
+            dtype=image_dtype,
         )
         # the next index to write into
         self.buffer_idx = 0
@@ -1755,8 +1762,6 @@ class DiffractingPlanes(Component):
             if i < num_slices - 1:
                 rays = rays.propagate(self.z_step)
 
-            print(rays_opl)
-
         yield rays
 
     def get_det_coords_for_gauss_rays(self, xEnd, yEnd, xp=np):
@@ -1829,6 +1834,143 @@ class PotentialSample(Sample):
     def gui_wrapper():
         from .gui import SampleGUI
         return SampleGUI
+
+
+class AttenuatingSample(Sample):
+    def __init__(
+        self,
+        z: float,
+        x_width: float,
+        y_width: float,
+        centre_yx: Tuple[float, float],
+        thickness: float,
+        attenuation_coefficient: float,
+        name: Optional[str] = None,
+    ):
+        super().__init__(name=name, z=z)
+
+        # We're renaming here some terms to be closer to the math in Hawkes
+        # Not sure if this is recommended or breaks any convetions
+        self.x_width = x_width
+        self.y_width = y_width
+        self.centre_yx = centre_yx
+        self.thickness = thickness
+        self.mu = attenuation_coefficient
+
+    def step(
+        self, rays: Rays
+    ) -> Generator[Rays, None, None]:
+
+        xp = rays.xp
+
+        centre_yx = self.centre_yx
+        x_width = self.x_width
+        y_width = self.y_width
+        thickness = self.thickness
+
+        # See Chapter 2 & 3 of principles of electron optics 2017 Vol 1 for more info
+        rho = xp.sqrt(1 + rays.dx ** 2 + rays.dy ** 2)  # Equation 3.16
+
+        dx = rays.dx / rho
+        dy = rays.dy / rho
+        dz = xp.ones(rays.num) / rho
+
+        # Define the box boundaries
+        x_min = centre_yx[1] - x_width / 2
+        x_max = centre_yx[1] + x_width / 2
+        y_min = centre_yx[0] - y_width / 2
+        y_max = centre_yx[0] + y_width / 2
+        z_min = self.z
+        z_max = z_min + thickness
+
+        x0 = rays.x
+        y0 = rays.y
+        z0 = xp.ones(rays.num) * self.z
+
+        # Line starting point (outside the box) and direction
+        p0 = xp.array([x0, y0, z0])    # Starting point
+        d = xp.array([dx, dy, dz])     # Direction vector (should be normalized)
+
+        # Normalize the direction vector
+        d = d / xp.linalg.norm(d, axis=0)
+
+        # Compute inverse of direction components
+        inv_dx = 1 / d[0]
+        inv_dy = 1 / d[1]
+        inv_dz = 1 / d[2]
+
+        # Compute t1 and t2 for x-axis
+        t1x = (x_min - p0[0]) * inv_dx
+        t2x = (x_max - p0[0]) * inv_dx
+        tmin_x = xp.minimum(t1x, t2x)
+        tmax_x = xp.maximum(t1x, t2x)
+
+        # Compute t1 and t2 for y-axis
+        t1y = (y_min - p0[1]) * inv_dy
+        t2y = (y_max - p0[1]) * inv_dy
+        tmin_y = xp.minimum(t1y, t2y)
+        tmax_y = xp.maximum(t1y, t2y)
+
+        # Compute t1 and t2 for z-axis
+        t1z = (z_min - p0[2]) * inv_dz
+        t2z = (z_max - p0[2]) * inv_dz
+        tmin_z = xp.minimum(t1z, t2z)
+        tmax_z = xp.maximum(t1z, t2z)
+
+        # Compute overall tmin and tmax
+        tmin = xp.maximum(tmin_x, xp.maximum(tmin_y, tmin_z))
+        tmax = xp.minimum(tmax_x, xp.minimum(tmax_y, tmax_z))
+
+        # Check for intersection
+        attenuation_mask = (tmax >= 0) & (tmin <= tmax)
+
+        # Calculate the path length inside the box
+        path_length = xp.zeros_like(tmin)
+        path_length[attenuation_mask] = tmax[attenuation_mask] - tmin[attenuation_mask]
+
+        # Apply attenuation
+        rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
+
+        rays = rays.propagate(thickness)
+
+        yield rays.new_with(
+            location=self.z + thickness,
+        )
+
+
+        # Calculate the path length inside the box for intersecting rays
+        path_length = xp.zeros_like(tmin)
+        path_length[attenuation_mask] = tmax[attenuation_mask] - tmin[attenuation_mask]
+
+        # Apply attenuation based on the calculated path lengths
+        rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
+
+        rays = rays.propagate(thickness)
+
+        yield rays.new_with(
+            location=self.z + thickness,
+        )
+
+        # Determine if the ray intersects the box
+        attenuation_mask = (tmax >= tmin) & (tmax > 0)
+
+        # Calculate the path length inside the box for intersecting rays
+        path_length = xp.zeros_like(tmin)
+        path_length[attenuation_mask] = tmax[attenuation_mask] - tmin[attenuation_mask]
+
+        # Apply attenuation based on the calculated path lengths
+        rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
+
+        rays = rays.propagate(thickness)
+
+        yield rays.new_with(
+            location=self.z + thickness,
+        )
+
+    @staticmethod
+    def gui_wrapper():
+        from .gui import AttenuatingSampleGUI
+        return AttenuatingSampleGUI
 
 
 class ProjectorLensSystem(Component):
