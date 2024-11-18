@@ -1172,10 +1172,10 @@ class SourceGUI(ComponentGUIWrapper):
         self._build_shiftsliders()
 
     def _build_rayslider(self, into=None):
-        num_rays = 1
+        num_rays = 1000
 
         self.rayslider, self.raysliderbox = labelled_slider(
-            num_rays, 1, 1e6, name="Number of Rays", tick_interval=64,
+            num_rays, 1, 1e5, name="Number of Rays", tick_interval=64,
             insert_into=into,
         )
         self.rayslider.valueChanged.connect(self.try_update_slot)
@@ -1405,9 +1405,9 @@ class GaussBeamGUI(SourceGUI):
             insert_into=vbox, decimals=0, tick_interval=100,
         )
         self.rayslider.valueChanged.connect(lambda val: self.randomsubsetslider.setMaximum(val))
-        
+
         self.voltageslider, _ = labelled_slider(
-            int(self.beam.phi_0 / 1000), 1, 200,
+            self.beam.phi_0, 1, 200,
             name='Voltage (kV)', insert_into=vbox,
             decimals=0, tick_interval=10,
         )
@@ -1431,9 +1431,9 @@ class GaussBeamGUI(SourceGUI):
 
         wo = self.beam.wo
         self.woslider, _ = labelled_slider(
-            wo / LENGTHSCALING, 1, 500,
+            wo / LENGTHSCALING, 1e-3, 10,
             name='Beamlet std.-dev. (µm)', insert_into=vbox,
-            decimals=1, tick_interval=10.,
+            decimals=4, tick_interval=10.,
         )
         self.woslider.valueChanged.connect(self.set_wo)
 
@@ -1608,10 +1608,10 @@ class AttenuatingSampleGUI(ComponentGUIWrapper):
 
     def _get_edges(self):
         # Define the cube vertices based on the sample parameters
-        x_width = self.attenuating_sample.x_width
-        y_width = self.attenuating_sample.y_width
-        thickness = self.attenuating_sample.thickness
-        center_yx = self.attenuating_sample.centre_yx
+        x_width = np.array(self.attenuating_sample.x_width)# / LENGTHSCALING
+        y_width = np.array(self.attenuating_sample.y_width)# / LENGTHSCALING
+        thickness = np.array(self.attenuating_sample.thickness)
+        center_yx = np.array(self.attenuating_sample.centre_yx)# / LENGTHSCALING
         z = Z_ORIENT * self.attenuating_sample.z
 
         # Define the 8 vertices of the cube
@@ -1626,7 +1626,7 @@ class AttenuatingSampleGUI(ComponentGUIWrapper):
             [center_yx[1] - x_width / 2, center_yx[0] + y_width / 2, z + thickness],
         ])
 
-        # # Apply rotations
+        # # Apply rotations 
         # tilt_y, tilt_x = self.attenuating_sample.tilt_angles_rad_yx
 
         # Rx = np.array([
@@ -1642,13 +1642,13 @@ class AttenuatingSampleGUI(ComponentGUIWrapper):
         # # Total rotation matrix
         # R = Ry @ Rx
 
-        # Center the vertices around the sample center for rotation
-        center = np.array([center_yx[1], center_yx[0], z + thickness / 2])
-        vertices -= center
-        # Apply rotation
-        vertices = vertices #@ R.T
-        # Translate back
-        vertices += center
+        # # Center the vertices around the sample center for rotation
+        # center = np.array([center_yx[1], center_yx[0], z + thickness / 2])
+        # vertices -= center
+        # # Apply rotation
+        # vertices = vertices #@ R.T
+        # # Translate back
+        # vertices += center
 
         # Define the edges of the cube
         edges = [

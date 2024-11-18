@@ -171,7 +171,7 @@ class Lens(Component):
 
     def _calculate_lens_paremeters(self, z1, z2, f, m, xp=np):
 
-        if f and m and not (z1 or z2):
+        if (f is not None and m is not None) and (z1 is None and z2 is None):
             # m <1e-10 means that the object is very far away, the lens focuses the beam to a point.
             if np.abs(m) <= 1e-10:
                 z1 = -1e10
@@ -183,14 +183,30 @@ class Lens(Component):
             else:
                 z1 = f * (1/m - 1)
                 z2 = f * (1 - m)
-        elif z1 and z2 and not (f or m):
-            f = (1 / z2 - 1 / z1) ** -1
-            m = z2 / z1
-        elif f and z2 and not (z1 or m):
-            z1 = (1 / f - 1 / z2) ** -1
-            m = z2 / z1
+        elif (z1 is not None and z2 is not None) and (f is None and m is None):
+            if np.abs(z1) < 1e-10:
+                z2 = 1e10
+                f = -1e10
+                m = 1e10
+            if np.abs(z2) < 1e-10:
+                z1 = 1e10
+                f = 1 / z2
+                m = 0.0
+            else:
+                f = (1 / z2 - 1 / z1) ** -1
+                m = z2 / z1
+        elif (f is not None and z1 is not None) and (z2 is None and m is None):
+            if np.abs(z1) < 1e-10:
+                z2 = 1e10
+                m = 1e10
+            elif np.abs(f) < 1e-10:
+                z2 = 1e10
+                m = 1e10
+            else:
+                z2 = (1 / f + 1 / z1) ** -1
+                m = z2 / z1
         else:
-            raise InvalidModelError("Lens must have defined: f and m, or z1 and z2, or f and z2")
+            raise InvalidModelError("Lens must have defined: f and m, or z1 and z2, or f and z1")
 
         return z1, z2, f, m
 

@@ -14,42 +14,49 @@ k = 2 * np.pi / wavelength
 
 wavelengths = np.full(n_rays, wavelength)
 
-size = 64
+size = 128
 det_shape = (size, size)
-pixel_size = 1e-6
+pixel_size = 10e-6
 dsize = det_shape[0] * pixel_size
 
 x_det = np.linspace(-dsize / 2, dsize / 2, size)
 
-lens_dist = 0.5
-sample_dist = 0.3
-focal = 0.2
-prop_dist = 1
+sample_dist = 0.5
+condenser_dist = 0.25
+objective_dist = sample_dist + 1e-2
+total_dist = 1
 
 components = (
     comp.GaussBeam(
         z=0.0,
-        voltage=calculate_phi_0(wavelength),
+        voltage=200e3,
         semi_angle=0.001,
-        radius=0.0001,
-        wo=0.0001,
+        radius=10e-6,
+        wo=3e-6,
         amplitude=1.0,
     ),
-    # comp.Lens(
-    #     z=lens_dist,
-    #     f=focal,
-    #     z2=sample_dist,
-    # ),
+    comp.Lens(
+        z=condenser_dist,
+        z1=-condenser_dist,
+        z2=sample_dist - condenser_dist,
+        name='Condenser Lens',
+    ),
     comp.AttenuatingSample(
-        z=lens_dist + sample_dist,
+        z=sample_dist,
         x_width=0.1,
         y_width=0.1,
-        thickness=0.01,
-        attenuation_coefficient=10,
+        thickness=50e-9,
+        attenuation_coefficient=1e7,
         centre_yx=(0.1/2, 0),
     ),
+    comp.Lens(
+        z=objective_dist,
+        z1=sample_dist - objective_dist,
+        z2=total_dist - objective_dist,
+        name='Objective Lens',
+    ),
     comp.AccumulatingDetector(
-        z=prop_dist,
+        z=total_dist,
         pixel_size=pixel_size,
         shape=det_shape,
         buffer_length=1,
@@ -58,17 +65,6 @@ components = (
 )
 
 model = Model(components, backend='gpu')
-
-# Run Model Once
-# rays = tuple(model.run_iter(num_rays=n_rays, random=False))
-# image = model.detector.get_image(rays[-1])
-
-# import matplotlib.pyplot as plt
-
-# plt.figure()
-# plt.imshow(np.abs(image))
-# plt.show()
-# Run Model Again With GUI
 AppWindow = QApplication(sys.argv)
 viewer = TemGymWindow(model)
 viewer.show()
