@@ -26,8 +26,6 @@ objective_dist = sample_dist + 1e-2
 projector_dist = 0.6
 total_dist = 1
 
-
-
 components = (
     comp.GaussBeam(
         z=0.0,
