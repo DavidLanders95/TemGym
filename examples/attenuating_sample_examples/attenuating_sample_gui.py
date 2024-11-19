@@ -3,7 +3,6 @@ from temgymbasic.model import (
 )
 from temgymbasic import components as comp
 import numpy as np
-from temgymbasic.utils import calculate_phi_0
 from PySide6.QtWidgets import QApplication
 from temgymbasic.gui import TemGymWindow
 import sys
@@ -24,7 +23,10 @@ x_det = np.linspace(-dsize / 2, dsize / 2, size)
 sample_dist = 0.5
 condenser_dist = 0.25
 objective_dist = sample_dist + 1e-2
+projector_dist = 0.6
 total_dist = 1
+
+
 
 components = (
     comp.GaussBeam(
@@ -32,7 +34,7 @@ components = (
         voltage=200e3,
         semi_angle=0.001,
         radius=10e-6,
-        wo=3e-6,
+        wo=1e-10,
         amplitude=1.0,
     ),
     comp.Lens(
@@ -54,6 +56,11 @@ components = (
         z1=sample_dist - objective_dist,
         z2=total_dist - objective_dist,
         name='Objective Lens',
+    ),
+    comp.ProjectorLensSystem(
+        first=comp.Lens(z=projector_dist, name='PL1', z1=-1, z2=1),
+        second=comp.Lens(z=projector_dist + 1e-3, name='PL2', z1=-1, z2=1),
+        name='Projector Lens System',
     ),
     comp.AccumulatingDetector(
         z=total_dist,

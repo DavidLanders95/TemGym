@@ -1431,7 +1431,7 @@ class GaussBeamGUI(SourceGUI):
 
         wo = self.beam.wo
         self.woslider, _ = labelled_slider(
-            wo / LENGTHSCALING, 1e-3, 10,
+            wo / LENGTHSCALING, 1e-6, 1,
             name='Beamlet std.-dev. (µm)', insert_into=vbox,
             decimals=4, tick_interval=10.,
         )

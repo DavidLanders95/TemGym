@@ -26,7 +26,6 @@ from .gbd import (
     calculate_Qinv,
     calculate_Qpinv,
     propagate_misaligned_gaussian,
-    propagate_misaligned_gaussian_region
 )
 from .rays import Rays, GaussianRays
 from .utils import (
@@ -188,9 +187,9 @@ class Lens(Component):
                 z2 = 1e10
                 f = -1e10
                 m = 1e10
-            if np.abs(z2) < 1e-10:
+            elif np.abs(z2) < 1e-10:
                 z1 = 1e10
-                f = 1 / z2
+                f = 1e10
                 m = 0.0
             else:
                 f = (1 / z2 - 1 / z1) ** -1
@@ -960,6 +959,16 @@ class Detector(Component):
     def rotation_rad(self, val: Radians):
         self._rotation = val
 
+    @property
+    def extent(self) -> NDArray:
+        sy, sx = self.shape
+        sy, sx = sy * self.pixel_size, sx * self.pixel_size
+        return np.array([-sx / 2, sx / 2, -sy / 2, sy / 2])
+
+    @extent.setter
+    def extent(self, extent: NDArray):
+        self._extent = extent
+
     def set_center_px(self, center_px: Tuple[int, int]):
         """
         For the desired image center in pixels (after any flip / rotation)
@@ -1010,7 +1019,6 @@ class Detector(Component):
         # this entire section can be optimised !!!
         return r[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]
 
-
     def image_dtype(self, xp=np):
         if self.interference is None:
             return xp.int32
@@ -1046,13 +1054,14 @@ class Detector(Component):
             # If we are doing interference, we add a complex number representing
             # the phase of the ray for now to each pixel.
             # Amplitude is 1.0 for now for each complex ray.
-            wavefronts = rays.amplitude * xp.exp(-1j * (2 * xp.pi / rays.wavelength) * rays.path_length)
+            wavefronts = rays.amplitude * xp.exp(-1j * (2 * xp.pi / rays.wavelength)
+                                                 * rays.path_length)
 
             if isinstance(rays, GaussianRays):
                 valid_wavefronts = wavefronts[0::5][mask]
             else:
                 valid_wavefronts = wavefronts[mask]
-            
+
             # image_dtype = valid_wavefronts.dtype
         elif self.interference == 'gauss':
             pass
@@ -1170,7 +1179,8 @@ class Detector(Component):
         # inv can be broadcast with xp.linalg.inv last 2 idcs
         # if all inputs are stacked in the first dim
         Qpinv = calculate_Qpinv(A, B, C, D, Qinv, xp=xp)
-        wnew = xp.sqrt(wavelength / (xp.pi * xp.abs(Qpinv[:, 0, 0].imag)))
+
+        # wnew = xp.sqrt(wavelength / (xp.pi * xp.abs(Qpinv[:, 0, 0].imag)))
         # det_coords = cp.array(det_coords)
         # p2m = cp.array(p2m)
         # path_length = cp.array(path_length)
@@ -1689,7 +1699,7 @@ class DiffractingPlanes(Component):
         endpoints = xp.stack((xEnd, yEnd), axis=-1)
 
         # Compute coordinates of detector points within mask radius
-        det_coords = self.grid_coords[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]   # pixel coordinates centred on end point of ray
+        det_coords = self.grid_coords[:, xp.newaxis, :] - endpoints[xp.newaxis, ...]
 
         # Call propagate_misaligned_gaussian and get contributions
         propagate_misaligned_gaussian(
@@ -1705,7 +1715,6 @@ class DiffractingPlanes(Component):
 
         xp = rays.xp
 
-        z_step = xp.array(self.z_step)
         field = xp.array(self.field)
 
         # Calculate atomic coordinates and indices of mask for this potential slice
@@ -1873,6 +1882,14 @@ class AttenuatingSample(Sample):
         self.thickness = thickness
         self.mu = attenuation_coefficient
 
+    @property
+    def entrance_z(self) -> float:
+        return self.z
+
+    @property
+    def exit_z(self) -> float:
+        return self.z + self.thickness
+
     def step(
         self, rays: Rays
     ) -> Generator[Rays, None, None]:
@@ -1947,41 +1964,14 @@ class AttenuatingSample(Sample):
         # Apply attenuation
         rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
 
-        rays = rays.propagate(thickness)
+        rays = rays.propagate_to(self.z + thickness)
+
+        rays.location = self.z + thickness
 
         yield rays.new_with(
-            location=self.z + thickness,
-        )
-
-
-        # Calculate the path length inside the box for intersecting rays
-        path_length = xp.zeros_like(tmin)
-        path_length[attenuation_mask] = tmax[attenuation_mask] - tmin[attenuation_mask]
-
-        # Apply attenuation based on the calculated path lengths
-        rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
-
-        rays = rays.propagate(thickness)
-
-        yield rays.new_with(
-            location=self.z + thickness,
-        )
-
-        # Determine if the ray intersects the box
-        attenuation_mask = (tmax >= tmin) & (tmax > 0)
-
-        # Calculate the path length inside the box for intersecting rays
-        path_length = xp.zeros_like(tmin)
-        path_length[attenuation_mask] = tmax[attenuation_mask] - tmin[attenuation_mask]
-
-        # Apply attenuation based on the calculated path lengths
-        rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
-
-        rays = rays.propagate(thickness)
-
-        yield rays.new_with(
-            location=self.z + thickness,
-        )
+                amplitude=rays.amplitude,
+                location=self.z + thickness
+            )
 
     @staticmethod
     def gui_wrapper():
