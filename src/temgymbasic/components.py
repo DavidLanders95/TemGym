@@ -1,6 +1,6 @@
 import abc
 from typing import (
-    Generator, Tuple, Optional, Type,
+    Generator, Tuple, List, Optional, Type,
     TYPE_CHECKING,
 )
 from dataclasses import dataclass, astuple
@@ -9,7 +9,7 @@ from dataclasses import dataclass, astuple
 import numpy as np
 from numpy.typing import NDArray  # Assuming np is an alias for numpy
 from scipy.constants import c, e, m_e
-from scipy.interpolate import RegularGridInterpolator
+from scipy.spatial.transform import Rotation as R
 
 from . import (
     UsageError,
@@ -35,9 +35,10 @@ from .utils import (
     gauss_beam_rayset,
     point_beam,
     calculate_direction_cosines,
+    convert_slope_to_direction_cosines,
     calculate_wavelength,
     get_array_from_device,
-    initial_r_rayset
+    initial_r_rayset,
 )
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ class Component(abc.ABC):
 
         self._name = name
         self._z = z
+        self.__backend = 'cpu'
 
     def _validate_component(self):
         pass
@@ -90,9 +92,20 @@ class Component(abc.ABC):
         ...
         raise NotImplementedError
 
+    @property
+    def backend(self) -> BackendT:
+        return self.__backend
+
+    @backend.setter
+    def backend(self, be: BackendT):
+        self.__backend = be
+
     @staticmethod
     def gui_wrapper() -> Optional[Type['ComponentGUIWrapper']]:
         return None
+
+    def initialise_with_backend(self):
+        pass
 
 
 @dataclass
@@ -1055,7 +1068,7 @@ class Detector(Component):
             # the phase of the ray for now to each pixel.
             # Amplitude is 1.0 for now for each complex ray.
             wavefronts = rays.amplitude * xp.exp(-1j * (2 * xp.pi / rays.wavelength)
-                                                 * rays.path_length)
+                                                 * 1) # rays.path_length)
 
             if isinstance(rays, GaussianRays):
                 valid_wavefronts = wavefronts[0::5][mask]
@@ -1867,110 +1880,202 @@ class AttenuatingSample(Sample):
         z: float,
         x_width: float,
         y_width: float,
-        centre_yx: Tuple[float, float],
         thickness: float,
-        attenuation_coefficient: float,
+        rotation: NDArray,
+        centre_yx: Tuple[float, float],
+        attenuation: NDArray,
         name: Optional[str] = None,
     ):
         super().__init__(name=name, z=z)
 
-        # We're renaming here some terms to be closer to the math in Hawkes
-        # Not sure if this is recommended or breaks any convetions
         self.x_width = x_width
         self.y_width = y_width
-        self.centre_yx = centre_yx
         self.thickness = thickness
-        self.mu = attenuation_coefficient
+        self.attenuation = attenuation
+        self.rotation = rotation
+        self.centre_yx = centre_yx
+
+        self.set_entrance_and_exit_z()
+        self.interp = self.interpolate()
+
+    def set_entrance_and_exit_z(self):
+        min_z, max_z = self.calculate_entrance_and_exit_z()
+        self.entrance_z = min_z
+        self.exit_z = max_z
 
     @property
     def entrance_z(self) -> float:
-        return self.z
+        return self._entrance_z
+
+    @entrance_z.setter
+    def entrance_z(self, entrance_z: float):
+        self._entrance_z = entrance_z
 
     @property
     def exit_z(self) -> float:
-        return self.z + self.thickness
+        return self._exit_z
+
+    @exit_z.setter
+    def exit_z(self, exit_z: float):
+        self._exit_z = exit_z
+
+    def calculate_entrance_and_exit_z(self, xp=np):
+
+        rotation = self.rotation
+        x, y, z, dx, dy, dz, _, _, _ = self.get_coords(xp)
+
+        x_min, x_max = x[0], x[-1]
+        y_min, y_max = y[0], y[-1]
+        z_min, z_max = z[0], z[-1]
+
+        corners = xp.array([
+            [x_min, y_min, z_min],
+            [x_min, y_min, z_max],
+            [x_min, y_max, z_min],
+            [x_max, y_min, z_min],
+            [x_max, y_max, z_min],
+            [x_max, y_min, z_max],
+            [x_min, y_max, z_max],
+            [x_max, y_max, z_max],
+        ]).T
+
+        corners_centre = xp.mean(corners, axis=1, keepdims=True)
+        corners_centred = corners - corners_centre
+        euler_angles = R.from_euler('xyz', rotation, degrees=True)
+        rotation_matrix = xp.array(euler_angles.as_matrix())
+
+        rotated_corners_centred = rotation_matrix @ corners_centred
+        rotated_corners = rotated_corners_centred + corners_centre
+        min_coords = xp.min(rotated_corners, axis=1)
+        max_coords = xp.max(rotated_corners, axis=1)
+
+        # Find the highest coordinate of the rotated corners
+        max_z = max_coords[2]
+
+        # Find the lowest coordinate of the rotated corners
+        min_z = min_coords[2]
+
+        return min_z, max_z
+
+    def get_coords(self, xp=np):
+
+        x_width = self.x_width
+        y_width = self.y_width
+        thickness = self.thickness
+        centre_yx = self.centre_yx
+        Nx, Ny, Nz = self.attenuation.shape
+
+        x_px = xp.arange(Nx)
+        y_px = xp.arange(Ny)
+        z_px = xp.arange(Nz)
+
+        x, dx = xp.linspace(-x_width / 2, x_width / 2, Nx, retstep=True)
+        y, dy = xp.linspace(-y_width / 2, y_width / 2, Ny, retstep=True)
+        z, dz = xp.linspace(0, thickness, Nz, retstep=True)
+
+        x += centre_yx[1]
+        y += centre_yx[0]
+        z += self.z
+
+        return x, y, z, dx, dy, dz, x_px, y_px, z_px
+
+    def interpolate(self):
+
+        if self.backend == 'cpu':
+            from scipy.interpolate import RegularGridInterpolator as RGI
+
+        elif self.backend == 'gpu':
+            from cupyx.scipy.interpolate import RegularGridInterpolator as RGI
+            
+        xp = get_array_module(self.backend)
+
+        z = self.z
+        attenuation = xp.array(self.attenuation)
+
+        x, y, z, dx, dy, dz, _, _, _ = self.get_coords(xp)
+
+        return RGI((x, y, z),
+                   attenuation,
+                   method="linear",
+                   bounds_error=False,
+                   fill_value=0.0)
+
+    @staticmethod
+    def rotate_rays(rays, centre_xyz, rotation, xp=np):
+        x_in, y_in, z_in = (rays.x - centre_xyz[0],
+                            rays.y - centre_xyz[1],
+                            xp.ones(rays.num) * rays.z - centre_xyz[2])
+
+        dy_in, dx_in = rays.dy, rays.dx
+
+        euler_angles = R.from_euler('xyz', -rotation, degrees=True)
+        rotation_matrix = xp.array(euler_angles.as_matrix())
+
+        xyz_in = xp.stack((x_in, y_in, z_in), axis=-1)
+        xyz_rot = xp.matmul(xyz_in, rotation_matrix.T)
+
+        l_in, m_in, n_in = convert_slope_to_direction_cosines(dx_in, dy_in, xp)
+        dir_cos = xp.stack((l_in, m_in, n_in), axis=-1)
+        dir_cos_rot = xp.matmul(dir_cos, rotation_matrix.T)
+
+        xyz_rot = xyz_rot + centre_xyz
+        return xyz_rot, dir_cos_rot
+
+    def initialise_with_backend(self):
+        self.interp = self.interpolate()
 
     def step(
         self, rays: Rays
     ) -> Generator[Rays, None, None]:
 
+        # The exponential attenuation of the intensity of a particle can be described by
+        # I = I0 * exp(-mu * x), where mu is the attenuation coefficient and x is the
+        # thickness of the material.
+        # In a simple case with a single material and an incident ray straight down, mu and x are
+        # just constants.
+        # If the material is made up of different "voxels" with different attenuation coefficients,
+        # and the ray is incident at
+        # an angle, to calculate mu * x, we have an integral: int{mu(x, y, z) * ds}, where ds is
+        # the path length of the ray through the material.
+        # Here we approximate this integral numerically by sampling a chosen number of points along
+        # the path of the ray through the material.
+        # though a with a voxel representation we could be more efficient by using a voxel traversal
+        # algorithm in the future perhaps.
         xp = rays.xp
 
-        centre_yx = self.centre_yx
-        x_width = self.x_width
-        y_width = self.y_width
-        thickness = self.thickness
+        interp = self.interp
 
-        # See Chapter 2 & 3 of principles of electron optics 2017 Vol 1 for more info
-        rho = xp.sqrt(1 + rays.dx ** 2 + rays.dy ** 2)  # Equation 3.16
+        # Change coordinates to the local coordinate system of the sample
+        centre_xyz = xp.array([self.centre_yx[1], self.centre_yx[0], self.z + self.thickness / 2])
 
-        dx = rays.dx / rho
-        dy = rays.dy / rho
-        dz = xp.ones(rays.num) / rho
+        rotation = self.rotation
 
-        # Define the box boundaries
-        x_min = centre_yx[1] - x_width / 2
-        x_max = centre_yx[1] + x_width / 2
-        y_min = centre_yx[0] - y_width / 2
-        y_max = centre_yx[0] + y_width / 2
-        z_min = self.z
-        z_max = z_min + thickness
+        # Rotate coordinates
+        xyz_rot, dir_cos_rot = self.rotate_rays(rays, centre_xyz, rotation, xp=xp)
 
-        x0 = rays.x
-        y0 = rays.y
-        z0 = xp.ones(rays.num) * self.z
+        z_prop_rot = self._exit_z - self._entrance_z
+        xyz_rot_out = xyz_rot + dir_cos_rot * z_prop_rot
 
-        # Line starting point (outside the box) and direction
-        p0 = xp.array([x0, y0, z0])    # Starting point
-        d = xp.array([dx, dy, dz])     # Direction vector (should be normalized)
+        num_points = 100
 
-        # Normalize the direction vector
-        d = d / xp.linalg.norm(d, axis=0)
+        start_points = xyz_rot
+        end_points = xyz_rot_out
 
-        # Compute inverse of direction components
-        inv_dx = 1 / d[0]
-        inv_dy = 1 / d[1]
-        inv_dz = 1 / d[2]
+        line_points = xp.linspace(start_points, end_points, num_points)
 
-        # Compute t1 and t2 for x-axis
-        t1x = (x_min - p0[0]) * inv_dx
-        t2x = (x_max - p0[0]) * inv_dx
-        tmin_x = xp.minimum(t1x, t2x)
-        tmax_x = xp.maximum(t1x, t2x)
+        values = interp(line_points)
 
-        # Compute t1 and t2 for y-axis
-        t1y = (y_min - p0[1]) * inv_dy
-        t2y = (y_max - p0[1]) * inv_dy
-        tmin_y = xp.minimum(t1y, t2y)
-        tmax_y = xp.maximum(t1y, t2y)
+        # Calculate the distances between consecutive points
+        distances = xp.linalg.norm(xp.diff(line_points, axis=0), axis=2)
 
-        # Compute t1 and t2 for z-axis
-        t1z = (z_min - p0[2]) * inv_dz
-        t2z = (z_max - p0[2]) * inv_dz
-        tmin_z = xp.minimum(t1z, t2z)
-        tmax_z = xp.maximum(t1z, t2z)
+        # Calculate the line integral
+        mu_path_integral = xp.sum(values[:-1] * distances, axis=0)
 
-        # Compute overall tmin and tmax
-        tmin = xp.maximum(tmin_x, xp.maximum(tmin_y, tmin_z))
-        tmax = xp.minimum(tmax_x, xp.minimum(tmax_y, tmax_z))
-
-        # Check for intersection
-        attenuation_mask = (tmax >= 0) & (tmin <= tmax)
-
-        # Calculate the path length inside the box
-        path_length = xp.zeros_like(tmin)
-        path_length[attenuation_mask] = tmax[attenuation_mask] - tmin[attenuation_mask]
-
-        # Apply attenuation
-        rays.amplitude[attenuation_mask] *= xp.exp(-self.mu * path_length[attenuation_mask])
-
-        rays = rays.propagate_to(self.z + thickness)
-
-        rays.location = self.z + thickness
+        rays.amplitude *= xp.sqrt(xp.exp(-mu_path_integral))
 
         yield rays.new_with(
+                location=float(self.z + self.thickness),
                 amplitude=rays.amplitude,
-                location=self.z + thickness
             )
 
     @staticmethod

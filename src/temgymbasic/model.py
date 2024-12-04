@@ -20,9 +20,10 @@ class Model:
         components: Sequence[comp.Component],
         backend: BackendT = 'cpu'
     ):
-        self.backend = backend
         self._components = components
+        self.backend = backend
 
+        self._set_backend_for_components(backend)
         self._sort_components()
         self._validate_components()
 
@@ -66,9 +67,10 @@ class Model:
     def last(self) -> comp.Detector:
         return self.components[-1]
 
-    def set_backend_for_components(self, backend):
+    def _set_backend_for_components(self, backend):
         for component in self.components:
-            component.set_backend(backend)
+            component.backend = backend
+            component.initialise_with_backend()
 
     def move_component(
         self,

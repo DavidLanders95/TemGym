@@ -11,6 +11,7 @@ except ImportError:
     cp = None
 
 from scipy.constants import e, m_e, h
+import scipy
 
 if TYPE_CHECKING:
     from .model import STEMModel
@@ -78,7 +79,7 @@ def R2P(x: NDArray[np.complex128]) -> Tuple[NDArray[np.float64], NDArray[Radians
 def as_gl_lines(all_rays: Sequence['Rays'], z_mult: int = 1):
     num_vertices = 0
     for r in all_rays[:-1]:
-        num_vertices += r.num_display
+        num_vertices += r.num_central
     num_vertices *= 2
 
     xp = all_rays[0].xp
@@ -91,7 +92,7 @@ def as_gl_lines(all_rays: Sequence['Rays'], z_mult: int = 1):
     def _add_vertices(r1: 'Rays', r0: 'Rays'):
         nonlocal idx, vertices
 
-        num_endpoints = r1.num_display
+        num_endpoints = r1.num_central
         sl = slice(idx, idx + num_endpoints * 2, 2)
         vertices[sl, 0] = r1.x_central
         vertices[sl, 1] = r1.y_central
@@ -491,13 +492,11 @@ def calculate_wavelength(phi_0: float, xp=np):
 def calculate_phi_0(wavelength: float, xp=np):
     return h ** 2 / (2 * wavelength ** 2 * abs(e) * m_e)
 
-
-def convert_slope_to_direction_cosines(dx, dy):
-    l_dir_cosine = dx / np.sqrt(1 + dx ** 2 + dy ** 2)
-    m_dir_cosine = dy / np.sqrt(1 + dx ** 2 + dy ** 2)
-    n_dir_cosine = 1 / np.sqrt(1 + dx ** 2 + dy ** 2)
+def convert_slope_to_direction_cosines(dx, dy, xp = np):
+    l_dir_cosine = dx / xp.sqrt(1 + dx ** 2 + dy ** 2)
+    m_dir_cosine = dy / xp.sqrt(1 + dx ** 2 + dy ** 2)
+    n_dir_cosine = 1 / xp.sqrt(1 + dx ** 2 + dy ** 2)
     return l_dir_cosine, m_dir_cosine, n_dir_cosine
-
 
 def calculate_direction_cosines(x0, y0, z0, x1, y1, z1, xp=np):
     # Calculate the principal ray vector from ray coordinate on object to centre of lens

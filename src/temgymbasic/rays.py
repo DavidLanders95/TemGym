@@ -48,6 +48,7 @@ class Rays:
         path_length: Union[float, NDArray] = 0.,
         **kwargs,
     ):
+
         xp = get_xp(data)
 
         num_rays = data.shape[1]
@@ -88,7 +89,7 @@ class Rays:
     def component(self) -> Optional['Component']:
         try:
             return self.location[-1]
-        except TypeError:
+        except (TypeError, IndexError):
             pass
         try:
             _ = self.location.z
@@ -136,9 +137,19 @@ class Rays:
     @dy.setter
     def dy(self, yslope):
         self.data[3, :] = yslope
+
     @property
-    def num_display(self):
+    def amplitude_central(self):
+        return self.amplitude
+    
+    @amplitude_central.setter
+    def amplitude_central(self, amp):
+        self.amplitude = amp
+
+    @property
+    def num_central(self):
         return self.num
+        
 
     @property
     def x_central(self):
@@ -289,9 +300,16 @@ class Rays:
 
 @dataclass
 class GaussianRays(Rays):
-    amplitude: Optional[NDArray] = None
     wo: Optional[NDArray] = None
 
+    @property
+    def amplitude_central(self):
+        return self.amplitude[0::5]
+    
+    @amplitude_central.setter
+    def amplitude_central(self, amp):
+        self.amplitude[0::5] = amp
+    
     @property
     def x_central(self):
         return self.x[0::5]
@@ -315,5 +333,5 @@ class GaussianRays(Rays):
         return self.mask
 
     @property
-    def num_display(self):
+    def num_central(self):
         return self.x_central.size

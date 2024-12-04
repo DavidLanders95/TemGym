@@ -31,6 +31,8 @@ import pyqtgraph as pg
 from superqt import QCollapsible
 
 import numpy as np
+from skimage import measure
+from scipy.spatial.transform import Rotation as R
 
 from . import shapes as comp_geom
 from .utils import as_gl_lines, P2R, R2P
@@ -45,7 +47,7 @@ if TYPE_CHECKING:
 LABEL_RADIUS = 0.3
 Z_ORIENT = -1
 RAY_COLOR = (0., 0.8, 0.)
-XYZ_SCALING = np.asarray((1e2, 1e2, 1.))
+XYZ_SCALING = np.asarray((1e3, 1e3, 1.))
 LENGTHSCALING = 1e-6
 MRAD = 1e-3
 UPDATE_RATE = 50
@@ -1251,7 +1253,7 @@ class ParallelBeamGUI(SourceGUI):
 
     @Slot(float)
     def set_radius(self, val):
-        self.beam.radius = val
+        self.beam.radius = val * LENGTHSCALING
         self.try_update(geom=True)
 
     def sync(self, block: bool = True):
@@ -1276,7 +1278,7 @@ class ParallelBeamGUI(SourceGUI):
 
         beam_radius = self.beam.radius
         self.beamwidthslider, _ = labelled_slider(
-            beam_radius, 0.001, 0.1, name='Parallel Beam Width', insert_into=vbox, decimals=3
+            beam_radius / LENGTHSCALING, 0.001, 200, name='Parallel Beam Width', insert_into=vbox, decimals=3
         )
         self.beamwidthslider.valueChanged.connect(self.set_radius)
 
@@ -1551,160 +1553,133 @@ class SampleGUI(GridGeomMixin, ComponentGUIWrapper):
 class AttenuatingSampleGUI(ComponentGUIWrapper):
 
     @property
-    def faces(self):
-        _faces = np.array([
-            [0, 1, 2], [0, 2, 3],   # Bottom face
-            [4, 5, 6], [4, 6, 7],   # Top face
-            [0, 1, 5], [0, 5, 4],   # Front face
-            [1, 2, 6], [1, 6, 5],   # Right face
-            [2, 3, 7], [2, 7, 6],   # Back face
-            [3, 0, 4], [3, 4, 7],   # Left face
-        ])
-        return _faces
-
-    @property
-    def attenuating_sample(self) -> 'comp.AttenuatingSample':
+    def sample(self) -> 'comp.AttenuatingSample':
         return self.component
+
+    @Slot(float)
+    def set_centre_x(self, val: float):
+        self.sample.centre_yx[1] = float(val) * LENGTHSCALING
+        self.sample.interp = self.sample.interpolate()
+        self.try_update(geom=True)
+
+    @Slot(float)
+    def set_centre_y(self, val: float):
+        self.sample.centre_yx[0] = float(val) * LENGTHSCALING
+        self.sample.interp = self.sample.interpolate()
+        self.try_update(geom=True)
 
     def build(self):
         vbox = QVBoxLayout()
+
+        location_params_vbox = QVBoxLayout()
+        location_params_label = QLabel("Location Parameters")
+        location_params_label.setStyleSheet("font-size: 16px, font-weight: bold, text-decoration: underline;")
+        location_params_vbox.addWidget(location_params_label)
+
+        self.xposwidget, _ = arrow_slider(
+            float(self.sample.centre_yx[1]) / LENGTHSCALING, -100, 100, name="Centre X",
+            insert_into=location_params_vbox, increment=0.001, decimals=8,
+        )
+        self.xposwidget.textChanged.connect(self.set_centre_x)
+
+        self.yposwidget, _ = arrow_slider(
+            float(self.sample.centre_yx[0]) / LENGTHSCALING, -100, 100, name="Centre Y",
+            insert_into=location_params_vbox, increment=0.001, decimals=8,
+        )
+        self.yposwidget.textChanged.connect(self.set_centre_y)
+
+        vbox.addLayout(location_params_vbox)
         self.box = vbox
-
-        # Tilt Slider
-        # self.tilt_slider, _ = labelled_slider(
-        #     0,
-        #     -20,
-        #     20,
-        #     name='Tilt (mrad)',
-        #     insert_into=vbox,
-        #     decimals=5,
-        # )
-
-        # self.tilt_slider.valueChanged.connect(self.set_tilt_y)
 
         return self
 
-    # def set_tilt_y(self, value):
-    #     tilt_radians_x = self.attenuating_sample._tilt_angles_rad_yx[1]
-    #     tilt_radians_y = value
-    #     self.attenuating_sample.tilt_angles_rad_yx = (tilt_radians_y, tilt_radians_x)
-    #     self.try_update(geom=True)
-
     def get_geom(self):
-        edges = self._get_edges()
 
-        lines = []
-        for edge in edges:
-            line = gl.GLLinePlotItem(
-                pos=np.array(edge),
-                color=(1, 1, 1, 1),
-                width=1,
-                antialias=True,
-            )
-            lines.append(line)
+        self.verts, self.faces = self._get_mesh()
 
-        self.geom = lines
-        return self.geom
+        verts = self.translate_vertices(self.verts)
+        verts = self.rotate_vertices(verts)
+        self.mesh_data = gl.MeshData(vertexes=verts,
+                                     faces=self.faces)
+        self.mesh_item = gl.GLMeshItem(meshdata=self.mesh_data,
+                                       color=(1, 1, 1, 1),
+                                       smooth=False,
+                                       drawEdges=True)
 
-    def _get_edges(self):
-        # Define the cube vertices based on the sample parameters
-        x_width = np.array(self.attenuating_sample.x_width)# / LENGTHSCALING
-        y_width = np.array(self.attenuating_sample.y_width)# / LENGTHSCALING
-        thickness = np.array(self.attenuating_sample.thickness)
-        center_yx = np.array(self.attenuating_sample.centre_yx)# / LENGTHSCALING
-        z = Z_ORIENT * self.attenuating_sample.z
+        return [self.mesh_item]
 
-        # Define the 8 vertices of the cube
-        vertices = np.array([
-            [center_yx[1] - x_width / 2, center_yx[0] - y_width / 2, z],
-            [center_yx[1] + x_width / 2, center_yx[0] - y_width / 2, z],
-            [center_yx[1] + x_width / 2, center_yx[0] + y_width / 2, z],
-            [center_yx[1] - x_width / 2, center_yx[0] + y_width / 2, z],
-            [center_yx[1] - x_width / 2, center_yx[0] - y_width / 2, z + thickness],
-            [center_yx[1] + x_width / 2, center_yx[0] - y_width / 2, z + thickness],
-            [center_yx[1] + x_width / 2, center_yx[0] + y_width / 2, z + thickness],
-            [center_yx[1] - x_width / 2, center_yx[0] + y_width / 2, z + thickness],
-        ])
+    def translate_vertices(self, verts):
+        verts[:, 0] = verts[:, 0] + self.sample.centre_yx[1]# * XYZ_SCALING[0]
+        verts[:, 1] = verts[:, 1] + self.sample.centre_yx[0]# * XYZ_SCALING[1]
 
-        # # Apply rotations 
-        # tilt_y, tilt_x = self.attenuating_sample.tilt_angles_rad_yx
+        return verts
 
-        # Rx = np.array([
-        #     [1, 0, 0],
-        #     [0, np.cos(tilt_x), -np.sin(tilt_x)],
-        #     [0, np.sin(tilt_x), np.cos(tilt_x)],
-        # ])
-        # Ry = np.array([
-        #     [np.cos(tilt_y), 0, np.sin(tilt_y)],
-        #     [0, 1, 0],
-        #     [-np.sin(tilt_y), 0, np.cos(tilt_y)],
-        # ])
-        # # Total rotation matrix
-        # R = Ry @ Rx
+    def rotate_vertices(self, verts):
 
-        # # Center the vertices around the sample center for rotation
-        # center = np.array([center_yx[1], center_yx[0], z + thickness / 2])
-        # vertices -= center
-        # # Apply rotation
-        # vertices = vertices #@ R.T
-        # # Translate back
-        # vertices += center
+        # Create a new rotation matrix from Euler angles
+        rotation = R.from_euler('xyz', self.sample.rotation, degrees=True)
+        rotation_matrix = rotation.as_matrix()
+        rotation_matrix = np.array(rotation_matrix)
 
-        # Define the edges of the cube
-        edges = [
-            [vertices[0], vertices[1]],
-            [vertices[1], vertices[2]],
-            [vertices[2], vertices[3]],
-            [vertices[3], vertices[0]],
-            [vertices[4], vertices[5]],
-            [vertices[5], vertices[6]],
-            [vertices[6], vertices[7]],
-            [vertices[7], vertices[4]],
-            [vertices[0], vertices[4]],
-            [vertices[1], vertices[5]],
-            [vertices[2], vertices[6]],
-            [vertices[3], vertices[7]],
-        ]
+        verts_centre = verts.mean(axis=0)
+        verts_centred = verts - verts_centre
+        verts_rotated = verts_centred @ rotation_matrix.T
+        verts = verts_rotated + verts_centre
 
-        # Create line plots for each edge
-        # lines = []
-        # for edge in edges:
-        #     line = gl.GLLinePlotItem(
-        #         pos=np.array(edge),
-        #         color=(1, 1, 1, 1),
-        #         width=1,
-        #         antialias=True,
-        #     )
-        #     lines.append(line)
+        return verts
 
-        # # Create a mesh item for the cube faces
-        # mesh = gl.GLMeshItem(
-        #     vertexes=vertices,
-        #     faces=self.faces,
-        #     faceColors=None,
-        #     drawEdges=False,
-        #     smooth=False,
-        #     shader='shaded',
-        #     glOptions='opaque',
-        # )
+    def _get_mesh(self):
+        x_width = np.array(self.sample.x_width)
+        y_width = np.array(self.sample.y_width)
+        z_pos = np.array(self.sample.z) * Z_ORIENT
 
-        # self.geom = lines
-        # Return both lines and mesh
-        return edges
+        thickness = np.array(self.sample.thickness)
+
+        attenuation = self.sample.attenuation
+
+        volume = np.pad(attenuation, 1, mode='constant', constant_values=0)
+        x_px, y_px, z_px = volume.shape
+
+        # Generate mesh from voxel grid using marching cubes
+        verts, faces, _, _ = measure.marching_cubes(volume)
+        verts = verts - 0.5
+
+        # Centre the coordinates of the mesh
+
+        verts[:, 0] = verts[:, 0] * x_width / x_px
+        verts[:, 1] = verts[:, 1] * y_width / y_px
+        verts[:, 2] = verts[:, 2] * thickness / z_px
+
+        verts_centre = verts.mean(axis=0)
+
+        verts[:, 0] = verts[:, 0] - verts_centre[0]
+        verts[:, 1] = verts[:, 1] - verts_centre[1]
+        verts[:, 2] = verts[:, 2] + z_pos
+
+        verts *= XYZ_SCALING
+
+        return verts, faces
 
     def update_geometry(self):
+        # # Copy the original vertices
+        # verts = self.verts.copy()
+        # Apply transformations using OpenGL methods
+        self.mesh_item.resetTransform()
+        self.mesh_item.translate(
+            self.sample.centre_yx[1] * XYZ_SCALING[0],
+            self.sample.centre_yx[0] * XYZ_SCALING[1],
+            Z_ORIENT * self.component.z * XYZ_SCALING[2]
+        )
+        self.mesh_item.rotate(self.sample.rotation[0], 1, 0, 0)
+        self.mesh_item.rotate(self.sample.rotation[1], 0, 1, 0)
+        self.mesh_item.rotate(self.sample.rotation[2], 0, 0, 1)
+        # # Scale the vertices
+        # verts *= XYZ_SCALING
+        # # Update the mesh data
+        # self.mesh_data.setVertexes(verts)
+        # Update the mesh item
+        self.mesh_item.meshDataChanged()
 
-        edges = self._get_edges()
-
-        for idx, geom_item in enumerate(self.geom):
-            geom_item.setData(
-                pos=edges[idx],
-            )
-            # elif isinstance(geom_item, gl.GLMeshItem):
-            #     geom_item.setMeshData(
-            #         vertexes=geom_item.vertexes,
-            #         faces=geom_item.faces,
-            #     )
 
 
 class STEMSampleGUI(SampleGUI):

@@ -72,7 +72,7 @@ pixel_size = 0.1
 wo = 2
 wos = np.full(n_rays, wo)
 
-amplitude = np.ones(n_rays)
+amplitude = np.ones(n_rays * 5)
 div = wavelength / (np.pi * wo)
 
 dPx = wo
