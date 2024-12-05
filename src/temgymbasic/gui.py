@@ -634,7 +634,7 @@ class LensGUI(ComponentGUIWrapper):
     @Slot(float)
     def set_f_and_m(self, val: float):
         self.lens._z1, self.lens._z2, self.lens._f, self.lens._m = (
-            self.lens._calculate_lens_paremeters(None, None, float(val), self.lens.m)
+            self.lens._calculate_lens_parameters(None, None, float(val), self.lens.m)
         )
         self.update_line_edits()
         self.try_update(geom=True)
@@ -642,7 +642,7 @@ class LensGUI(ComponentGUIWrapper):
     @Slot(float)
     def set_m_and_f(self, val: float):
         self.lens._z1, self.lens._z2, self.lens._f, self.lens._m = (
-            self.lens._calculate_lens_paremeters(None, None, self.lens.f, float(val))
+            self.lens._calculate_lens_parameters(None, None, self.lens.f, float(val))
         )
         self.update_line_edits()
         self.try_update(geom=True)
@@ -650,7 +650,7 @@ class LensGUI(ComponentGUIWrapper):
     @Slot(float)
     def set_z1_and_z2(self, val: float):
         self.lens._z1, self.lens._z2, self.lens._f, self.lens._m = (
-            self.lens._calculate_lens_paremeters(float(val), self.lens.z2, None, None)
+            self.lens._calculate_lens_parameters(float(val), self.lens.z2, None, None)
         )
         self.update_line_edits()
         self.try_update(geom=True)
@@ -658,7 +658,7 @@ class LensGUI(ComponentGUIWrapper):
     @Slot(float)
     def set_z2_and_z1(self, val: float):
         self.lens._z1, self.lens._z2, self.lens._f, self.lens._m = (
-            self.lens._calculate_lens_paremeters(self.lens.z1, float(val), None, None)
+            self.lens._calculate_lens_parameters(self.lens.z1, float(val), None, None)
         )
         self.update_line_edits()
         self.try_update(geom=True)
@@ -666,7 +666,7 @@ class LensGUI(ComponentGUIWrapper):
     @Slot(float)
     def set_z1_and_f(self, val: float):
         self.lens._z1, self.lens._z2, self.lens._f, self.lens._m = (
-            self.lens._calculate_lens_paremeters(float(val), None, self.lens.f, None)
+            self.lens._calculate_lens_parameters(float(val), None, self.lens.f, None)
         )
         self.update_line_edits()
         self.try_update(geom=True)
@@ -674,7 +674,7 @@ class LensGUI(ComponentGUIWrapper):
     @Slot(float)
     def set_f_and_z1(self, val: float):
         self.lens._z1, self.lens._z2, self.lens._f, self.lens._m = (
-            self.lens._calculate_lens_paremeters(self.lens.z1, None, float(val), None)
+            self.lens._calculate_lens_parameters(self.lens.z1, None, float(val), None)
         )
         self.update_line_edits()
         self.try_update(geom=True)

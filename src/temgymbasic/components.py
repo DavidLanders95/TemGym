@@ -142,46 +142,17 @@ class Lens(Component):
                  name: Optional[str] = None):
         super().__init__(z=z, name=name)
 
+        if f is not None and (m is None and z1 is None and z2 is None):
+            m = -1.0
+
+        self.z1, self.z2, self.f, self.m = self._calculate_lens_parameters(z1, z2, f, m)
         self.aber_coeffs = aber_coeffs
-        self._z1, self._z2, self._f, self._m = self._calculate_lens_paremeters(z1, z2, f, m)
-
-    @property
-    def f(self) -> float:
-        return self._f
-
-    @f.setter
-    def f(self, f: float):
-        self._f = f
-
-    @property
-    def m(self) -> float:
-        return self._m
-
-    @m.setter
-    def m(self, m: float):
-        self._m = m
-
-    @property
-    def z1(self) -> float:
-        return self._z1
-
-    @z1.setter
-    def z1(self, z1: float):
-        self._z1 = z1
-
-    @property
-    def z2(self) -> float:
-        return self._z2
-
-    @z2.setter
-    def z2(self, z2: float):
-        self._z2 = z2
 
     @property
     def ffp(self) -> float:
         return self.z - abs(self._f)
 
-    def _calculate_lens_paremeters(self, z1, z2, f, m, xp=np):
+    def _calculate_lens_parameters(self, z1, z2, f, m, xp=np):
 
         if (f is not None and m is not None) and (z1 is None and z2 is None):
             # m <1e-10 means that the object is very far away, the lens focuses the beam to a point.
@@ -315,6 +286,45 @@ class Lens(Component):
         return LensGUI
 
 
+class ThickLens(Lens):
+    def __init__(
+            self,
+            z: float,
+            f: float,
+            m: Optional[float] = None,
+            z1: Optional[float] = None,  # Object Plane
+            z2: Optional[float] = None,  # Image Plane
+            z_pi: Optional[float] = 0.0,  # Principal Image Plane
+            z_po: Optional[float] = 0.0,  # Principal Object Plane
+    ):
+        super().__init__(z=z, f=f, m=m, z1=z1, z2=z2)
+        self.z_pi = z_pi
+        self.z_po = z_po
+        self.z_fi = self.f + self.z_pi
+
+    @staticmethod
+    def lens_matrix(f, xp=np):
+        '''
+        Lens ray transfer matrix
+
+        Parameters
+        ----------
+        f : float
+            Focal length of lens
+
+        Returns
+        -------
+        ndarray
+            Output Ray Transfer Matrix
+        '''
+
+        return xp.array(
+            [[-(z1 - z_fi) / fi,      0, 0,      0, 0],
+             [-1 / f, (z2 - z_), 0,      0, 0],
+             [0,      0, 1,      0, 0],
+             [0,      0, -1 / f, 1, 0],
+             [0,      0, 0,      0, 1]]
+        )
 class PerfectLens(Lens):
     def __init__(self, z: float,
                  f: float,
